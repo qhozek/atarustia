@@ -76,12 +76,20 @@ pub fn help(ctx: &Context, module: Option<&str>) -> Result<Screen> {
 }
 pub fn config(ctx: &Context, module: &str) -> Result<Screen> {
     if module.is_empty() {
-        let mut rows = vec![vec![button(
-            crate::info::MODULE,
-            Action::ConfigOpen {
-                module: crate::info::MODULE.into(),
-            },
-        )]];
+        let mut rows = vec![
+            vec![button(
+                crate::update_ui::MODULE,
+                Action::ConfigOpen {
+                    module: crate::update_ui::MODULE.into(),
+                },
+            )],
+            vec![button(
+                crate::info::MODULE,
+                Action::ConfigOpen {
+                    module: crate::info::MODULE.into(),
+                },
+            )],
+        ];
         for m in ctx.modules.lock().unwrap().list() {
             rows.push(vec![button(
                 m.name.clone(),
@@ -225,6 +233,9 @@ pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Resul
     if module == crate::info::MODULE {
         serde_json::from_value::<crate::info::Config>(config.clone())?.validate()?;
     }
+    if module == crate::update_ui::MODULE {
+        let _: crate::update_ui::Config = serde_json::from_value(config.clone())?;
+    }
     ctx.db.set(module, "__config__", config)
 }
 pub fn apply_config(
@@ -258,6 +269,13 @@ type ConfigData = (
     std::collections::BTreeMap<String, crate::validators::Validator>,
 );
 pub fn config_data(ctx: &Context, module: &str) -> Result<ConfigData> {
+    if module == crate::update_ui::MODULE {
+        return Ok((
+            serde_json::to_value(crate::update_ui::Config::load(&ctx.db)?)?,
+            serde_json::to_value(crate::update_ui::Config::default())?,
+            Default::default(),
+        ));
+    }
     if module == crate::info::MODULE {
         return Ok((
             serde_json::to_value(crate::info::Config::load(&ctx.db)?)?,

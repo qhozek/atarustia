@@ -57,6 +57,14 @@ pub enum Action {
     Help {
         module: Option<String>,
     },
+    Update {
+        current: String,
+        incoming: String,
+        #[serde(default)]
+        retry: bool,
+    },
+    Restart,
+    UpdateDismiss,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +89,8 @@ pub struct Screen {
     pub rich_buttons: Vec<Key>,
     pub button_appearance: Vec<Vec<crate::markup::Appearance>>,
     pub rich_button_appearance: Vec<crate::markup::Appearance>,
+    pub close_button: bool,
+    pub link_preview: bool,
 }
 impl Default for Screen {
     fn default() -> Self {
@@ -96,6 +106,8 @@ impl Default for Screen {
             rich_buttons: vec![],
             button_appearance: vec![],
             rich_button_appearance: vec![],
+            close_button: true,
+            link_preview: true,
         }
     }
 }
@@ -258,10 +270,17 @@ impl Screen {
         );
         ensure!(
             self.text.len() <= 128 * 1024
-                && self
-                    .pages
-                    .iter()
-                    .all(|s| s.encode_utf16().count() <= crate::output::MESSAGE_LIMIT),
+                && self.pages.iter().all(|s| if self.html {
+                    let value = crate::bot_requests::Text {
+                        text: s.clone(),
+                        parse_mode: crate::bot_requests::ParseMode::Html,
+                        entities: None,
+                    };
+                    std::panic::catch_unwind(|| value.parse(crate::output::MESSAGE_LIMIT, false))
+                        .is_ok_and(|result| result.is_ok())
+                } else {
+                    s.encode_utf16().count() <= crate::output::MESSAGE_LIMIT
+                }),
             "form text too large"
         );
         ensure!(
@@ -575,11 +594,13 @@ impl Forms {
             }
             rows.push(nav);
         }
-        rows.push(vec![Key {
-            text: "✕".into(),
-            action: Some(Action::Close),
-            url: None,
-        }]);
+        if unit.screen.close_button {
+            rows.push(vec![Key {
+                text: "✕".into(),
+                action: Some(Action::Close),
+                url: None,
+            }]);
+        }
         let mut keyboard = vec![];
         for (row_index, row) in rows.into_iter().enumerate() {
             let mut buttons = vec![];
@@ -656,7 +677,9 @@ impl Forms {
         } else {
             InputMessage::new().text(body)
         };
-        Ok(message.reply_markup(ReplyMarkup::from_buttons(&keyboard)))
+        Ok(message
+            .link_preview(unit.screen.link_preview)
+            .reply_markup(ReplyMarkup::from_buttons(&keyboard)))
     }
 }
 #[cfg(test)]

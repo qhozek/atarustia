@@ -69,6 +69,34 @@ async fn core_info_settings_share_ui_validation_and_persistence() {
     );
     f.connection.close().await.unwrap();
 }
+#[tokio::test]
+async fn updater_notification_setting_uses_core_config_and_reset() {
+    let f = Fixture::new();
+    let module = atarustia::update_ui::MODULE;
+    atarustia::screens::config(&f.ctx, module)
+        .unwrap()
+        .validate()
+        .unwrap();
+    atarustia::screens::apply_config(&f.ctx, module, "update_notifications", None, false).unwrap();
+    assert!(
+        !atarustia::update_ui::Config::load(&f.ctx.db)
+            .unwrap()
+            .update_notifications
+    );
+    let before = f.ctx.db.get(module, "__config__");
+    assert!(
+        atarustia::screens::set_config(&f.ctx, module, "update_notifications", json!("bad"))
+            .is_err()
+    );
+    assert_eq!(before, f.ctx.db.get(module, "__config__"));
+    atarustia::screens::apply_config(&f.ctx, module, "update_notifications", None, true).unwrap();
+    assert!(
+        atarustia::update_ui::Config::load(&Database::open(f.dir.path(), 1).unwrap())
+            .unwrap()
+            .update_notifications
+    );
+    f.connection.close().await.unwrap();
+}
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();

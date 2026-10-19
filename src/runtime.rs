@@ -250,6 +250,11 @@ pub async fn run_with_modules(
         }
         let db = Arc::new(Database::open(&root, owner)?);
         db.set("RustRuntime", "restart", false)?;
+        db.set(
+            "RustRuntime",
+            "premium",
+            matches!(&me.raw,grammers_client::tl::enums::User::User(user) if user.premium),
+        )?;
         let modules = Registry::load(&root, owner)?;
         for module in modules.list() {
             for command in module.commands {
@@ -317,6 +322,9 @@ pub async fn run_with_modules(
         });
         tracing::info!(owner,account=%name,"account ready; send .help to Saved Messages");
         context.native.ready(&context.services()).await?;
+        if let Err(error) = crate::update_flow::complete_for(&context, false).await {
+            tracing::warn!(error=%error,"restart report deferred");
+        }
         if let Some(token) = token.filter(|_| !options.no_bot) {
             let bot_id = token.split(':').next().context("invalid bot token")?;
             let bot = Connection::open_with_proxy(
@@ -341,8 +349,26 @@ pub async fn run_with_modules(
         }
         let ctx = context.clone();
         let setup = context.clone();
+        let notifier = context.clone();
+        let account_done = CancellationToken::new();
+        let notification_stop = account_done.clone();
+        workers.spawn(async move {
+            let mut tick=tokio::time::interval_at(tokio::time::Instant::now()+Duration::from_secs(1800),Duration::from_secs(1800));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let fallback=tokio::time::sleep(Duration::from_secs(300));tokio::pin!(fallback);let mut checked=false;
+            loop {tokio::select! {
+                _=notifier.stop.cancelled()=>break,
+                _=notification_stop.cancelled()=>break,
+                _=&mut fallback,if !checked=>{checked=true;tokio::select!{_=notifier.stop.cancelled()=>break,_=notification_stop.cancelled()=>break,result=crate::update_flow::ready_fallback(&notifier)=>{if let Err(error)=result{tracing::warn!(error=%error,"restart report failed");}}}},
+                _=tick.tick()=>{tokio::select!{_=notifier.stop.cancelled()=>break,_=notification_stop.cancelled()=>break,result=crate::update_flow::notify(&notifier)=>{if let Err(error)=result{tracing::warn!(error=%notifier.logs.redact(error.to_string()),"update notification failed");}}}}
+            }}
+            Ok::<_,anyhow::Error>(())
+        });
         workers.spawn(async move{if !setup.db.get("RustSetup","ready").as_bool().unwrap_or(false){match tokio::time::timeout(Duration::from_secs(120),crate::content::setup(&setup.client,&setup.db)).await{Ok(Ok(_))=>{setup.db.set("RustSetup","ready",true)?;let _=setup.client.send_message(grammers_session::types::PeerId::self_user().to_ambient_ref(),format!("⛈ atarustia Rust\n{}help — commands\n{}config — module settings\n{}set_backup_period 24 — daily backups",setup.db.prefix(),setup.db.prefix(),setup.db.prefix())).await;},_=>tracing::warn!("content setup failed; use .setup to retry")}}Ok::<_,anyhow::Error>(())});
-        workers.spawn(async move { account_loop(connection, ctx).await });
+        workers.spawn(async move {
+            let _done = account_done.drop_guard();
+            account_loop(connection, ctx).await
+        });
     }
     if workers.is_empty() {
         stop.cancel();

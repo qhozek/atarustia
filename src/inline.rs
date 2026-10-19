@@ -209,6 +209,9 @@ async fn run_inner(
         bot = me.username().unwrap_or("unknown"),
         "inline bot connected over MTProto"
     );
+    if let Err(error) = crate::update_flow::complete_for(&context, true).await {
+        tracing::warn!(error=%error,"restart report deferred");
+    }
     let mut updates = connection
         .client
         .stream_updates(connection.updates.take().unwrap(), Default::default())
@@ -402,6 +405,9 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     }
                 }
                 let message = match click.action {
+                    action @ (Action::Update { .. } | Action::Restart | Action::UpdateDismiss) => {
+                        return crate::update_flow::callback(context, &q, click.unit, action).await;
+                    }
                     Action::Copy { .. } | Action::SwitchInline { .. } | Action::Disabled => {
                         q.answer().send().await?;
                         return Ok(());

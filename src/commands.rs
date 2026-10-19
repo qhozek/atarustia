@@ -34,7 +34,7 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ),
     (
         "update",
-        "[full_commit_hash] — проверить/применить обновление исходников",
+        "[-f|full_commit_hash] — обновление исходников с подтверждением",
     ),
     (
         "setup",
@@ -111,7 +111,7 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ),
     ("weburl", "одноразовая ссылка, только в Избранном"),
     ("source", "исходный проект и версия порта"),
-    ("restart", "корректно перезапустить процесс"),
+    ("restart", "[-f] — перезапуск с подтверждением"),
 ];
 pub fn is_builtin(name: &str) -> bool {
     BUILTINS
@@ -491,6 +491,10 @@ impl Context {
         Ok(())
     }
     async fn execute(&self, m: &Message, name: &str, args: &str) -> Result<Option<String>> {
+        if matches!(name, "update" | "restart") {
+            crate::update_flow::command(self, m, name, args).await?;
+            return Ok(None);
+        }
         if matches!(name, "info" | "atarustia") {
             crate::info::send(self, m).await?;
             return Ok(None);
@@ -624,36 +628,6 @@ impl Context {
                 self.db.set("RustRuntime", "restart", true)?;
                 self.stop.cancel();
                 return Ok(None);
-            }
-            "update" => {
-                let _guard = self.maintenance.lock().await;
-                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-                if args.is_empty() {
-                    let r = crate::updater::check(root).await?;
-                    if r.current == r.incoming {
-                        "Up to date".into()
-                    } else {
-                        format!(
-                            "{} → {}\n{}\n{}\nApply reviewed commit: {}update {}",
-                            r.current,
-                            r.incoming,
-                            r.commits,
-                            r.diff,
-                            self.db.prefix(),
-                            r.incoming
-                        )
-                    }
-                } else {
-                    crate::updater::apply(root, args).await?;
-                    telegram::answer(
-                        m,
-                        "Sources updated; Cargo will compile the updated checkout on restart.",
-                    )
-                    .await?;
-                    self.db.set("RustRuntime", "restart", true)?;
-                    self.stop.cancel();
-                    return Ok(None);
-                }
             }
             "ch_bot_token" => {
                 ensure!(
@@ -1125,12 +1099,6 @@ impl Context {
                     .context("web disabled; restart without --no-web")?
                     .link()
             }
-            "restart" => {
-                telegram::answer(m, "Перезапуск…").await?;
-                self.db.set("RustRuntime", "restart", true)?;
-                self.stop.cancel();
-                return Ok(None);
-            }
             _ => bail!("unknown command"),
         };
         Ok(Some(text))
@@ -1403,7 +1371,7 @@ pub async fn capture(
     }
 }
 /// Drop also runs if the command handler is cancelled during shutdown.
-struct ProcessGroup(Option<u32>);
+pub(crate) struct ProcessGroup(pub(crate) Option<u32>);
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
         #[cfg(unix)]
@@ -1421,10 +1389,10 @@ impl Drop for ProcessGroup {
 }
 
 #[cfg(windows)]
-struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 impl WindowsJob {
-    fn attach(child: &tokio::process::Child) -> Result<Self> {
+    pub(crate) fn attach(child: &tokio::process::Child) -> Result<Self> {
         use windows_sys::Win32::{Foundation::CloseHandle, System::JobObjects::*};
         // The job owns no Rust references; the process handle remains owned by tokio::Child.
         unsafe {

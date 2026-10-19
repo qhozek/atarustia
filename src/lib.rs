@@ -56,6 +56,8 @@ pub mod sqlite_migration;
 pub mod storage;
 pub mod story_payload;
 pub mod telegram;
+pub mod update_flow;
+pub mod update_ui;
 pub mod updater;
 pub mod validators;
 pub mod web;
