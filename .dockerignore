@@ -1,0 +1,10 @@
+target
+data
+*.log
+*.atsession
+atarustia.key
+config*.json
+.env
+.env.*
+*.session
+*.key

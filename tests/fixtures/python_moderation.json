@@ -1,0 +1,7 @@
+[
+  {"name":"empty","permissions":{},"until_date":null,"hex":"1804129ffe85020000000000"},
+  {"name":"photos","permissions":{"can_send_photos":true},"until_date":1800000000,"hex":"1804129ffa85020000d2496b"},
+  {"name":"text_other","permissions":{"can_send_messages":true,"can_send_other_messages":true,"can_pin_messages":true},"until_date":null,"hex":"1804129f8485000000000000"},
+  {"name":"ban","until_date":1800000000,"hex":"1804129f0100000000d2496b"},
+  {"name":"unban","hex":"1804129f0000000000000000"}
+]

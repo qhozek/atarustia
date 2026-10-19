@@ -1,0 +1,54 @@
+[package]
+name = "atarustia"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A native Rust Telegram userbot with an MTProto inline bot"
+license = "AGPL-3.0-only"
+repository = "https://github.com/qhozek/atarustia"
+
+[workspace]
+members = ["vendor/grammers-mtsender"]
+default-members = ["."]
+resolver = "2"
+
+[dependencies]
+aes-gcm = "0.10.3"
+anyhow = "1.0"
+axum = "0.8"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive", "env"] }
+fs2 = "0.4"
+grammers-client = { version = "=0.11.0", features = ["html", "markdown", "proxy"] }
+grammers-session = { version = "=0.11.0", default-features = false, features = ["serde"] }
+grammers-mtsender = { version = "=0.11.0", features = ["proxy"] }
+hex = "0.4"
+rand = "0.8"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+rhai = { version = "1.23", features = ["sync", "serde"] }
+rpassword = "7"
+rusqlite = { version = "0.37", features = ["bundled", "serialize", "limits", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+zeroize = { version = "1", features = ["derive"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[patch.crates-io]
+grammers-mtsender = { path = "vendor/grammers-mtsender" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects"] }

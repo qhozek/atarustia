@@ -1,0 +1,44 @@
+[
+  {
+    "type": "content",
+    "id": "contact",
+    "title": "Example contact",
+    "description": "Synthetic contact, replace before use",
+    "content": {
+      "type": "contact",
+      "phone_number": "+10000000000",
+      "first_name": "Example",
+      "last_name": "Contact"
+    },
+    "keyboard": [[{
+      "text": "Website",
+      "kind": {"type": "url", "url": "https://example.com"},
+      "style": "primary"
+    }]]
+  },
+  {
+    "type": "content",
+    "id": "venue",
+    "title": "Example venue",
+    "content": {
+      "type": "venue",
+      "point": {"latitude": 55.75, "longitude": 37.62, "horizontal_accuracy": 12.9},
+      "title": "Example venue",
+      "address": "Example address",
+      "provider": {"type": "foursquare", "id": "example-id", "category": "food"}
+    }
+  },
+  {
+    "type": "content",
+    "id": "preview",
+    "title": "Explicit web preview",
+    "content": {
+      "type": "web_page",
+      "text": "<b>Example</b>",
+      "html": true,
+      "url": "https://example.com",
+      "prefer_large_media": true,
+      "show_above_text": true
+    }
+  }
+]

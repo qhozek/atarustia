@@ -1,0 +1,10 @@
+[
+  {"name":"add","hex":"00fdce1515c4b51c0200000009000000000000000a00000000000000","expected":{"type":"members_added","user_ids":[9,10]}},
+  {"name":"topic","hex":"5692990d0100000005546f7069630000563412000100000000002000","expected":{"type":"forum_topic_created","name":"Topic","title_missing":false,"icon_color":1193046,"icon_custom_emoji_id":"9007199254740993"}},
+  {"name":"topic_edit","hex":"204894c00e0000000000000000000000379779bcb5757299","expected":{"type":"forum_topic_edited","name":null,"icon_custom_emoji_id":"0","is_closed":false,"is_hidden":true}},
+  {"name":"web","hex":"7980dd4706427574746f6e000d7b22616e73776572223a34327d0000","expected":{"type":"web_app_data","button_text":"Button","data":"{\"answer\":42}"}},
+  {"name":"ttl","hex":"7b4d133c010000003c0000000900000000000000","expected":{"type":"message_auto_delete_timer_changed","message_auto_delete_time":60,"auto_setting_from":9}},
+  {"name":"migrate","hex":"927f03e11503000000000000","expected":{"type":"chat_migrated_to","chat_id":-1000000000789}},
+  {"name":"payment","hex":"cc0ca0ff14000000035854527b000000000000000300ff017ec202ea0874656c656772616d0000000870726f766964657200000000d2496b","expected":{"type":"successful_payment","currency":"XTR","total_amount":123,"invoice_payload":"AP8B","invoice_payload_encoding":"base64","order_info":null,"shipping_option_id":null,"charge":{"telegram_payment_charge_id":"telegram","provider_payment_charge_id":"provider"},"is_first_recurring":true,"is_recurring":true,"subscription_expiration_date":1800000000}},
+  {"name":"pin","hex":"ed38bd94","expected":{"type":"message_pinned","message_id":null}}
+]

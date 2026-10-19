@@ -1,0 +1,30 @@
+[Unit]
+Description=atarustia Rust Telegram userbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atarustia
+Group=atarustia
+StateDirectory=atarustia
+WorkingDirectory=/opt/atarustia
+Environment=CARGO_HOME=/var/lib/atarustia/cargo
+Environment=CARGO_TARGET_DIR=/var/lib/atarustia/target
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/etc/atarustia.env
+ExecStart=/usr/local/bin/cargo run --locked -- --data-root /var/lib/atarustia --no-auth
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/atarustia
+# For .update, grant write access to /opt/atarustia explicitly and make the
+# checkout belong to this service user. It is read-only by default here.
+
+[Install]
+WantedBy=multi-user.target

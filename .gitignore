@@ -1,0 +1,14 @@
+/target/
+/data/
+*.log
+*.atsession
+atarustia.key
+config.json
+config-*.json
+/loaded_modules/
+*.tmp
+.env
+.env.*
+*.key
+*.session
+*.session-*

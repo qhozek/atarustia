@@ -1,0 +1,9 @@
+{
+  "manifest": {
+    "name": "hello",
+    "description": "Example native Rhai module",
+    "commands": [{"name":"hello","description":"[name] — say hello","function":"hello","permission":"owner"}],
+    "config": {"greeting":"Hello"}
+  },
+  "source": "fn hello(args, config) { config.greeting + \", \" + (if args == \"\" { \"world\" } else { args }) + \"!\" }"
+}

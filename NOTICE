@@ -1,0 +1,10 @@
+atarustia — Telegram userbot in Rust, AGPL-3.0-only.
+
+The project includes work derived from the userbot maintained by xenside at source snapshot
+c2f80d91dcc3fe4c5f3e388f31cb3229a3b66dc3. Original source location, expressed without a product alias:
+https://git.break.wtf/xenside/%61%74%61%72%61%78%69%61
+Copyright and license notices in derived and vendored code remain applicable.
+
+grammers dependencies are MIT OR Apache-2.0. The local grammers-mtsender patch is distributed under
+the MIT option; see vendor/grammers-mtsender/LICENSE-MIT and ATARUSTIA_PATCH.md.
+Telegram and Telegram Desktop are trademarks of their respective owners. This project is independent.

@@ -1,0 +1,11 @@
+{
+  "manifest": {
+    "name": "counter",
+    "description": "Stateful counter with an owner-bound inline callback",
+    "commands": [{"name":"counter","description":"Open counter","function":"counter","permission":"owner"}],
+    "config": {"step":1,"enabled":true},
+    "watchers": [],
+    "loops": [{"function":"tick","interval_seconds":3600,"autostart":false}]
+  },
+  "source": "fn view(n) { #{ text: \"Counter: \" + n, buttons: [[#{text:\"+\", action:#{\"type\":\"module\",\"module\":\"counter\",\"function\":\"increment\",args:#{}}}]], ttl_seconds: 3600 } } fn counter(args, config) { let n = if type_of(state) == \"map\" { state.count } else { 0 }; #{screen:view(n),state:#{count:n}} } fn increment(event, config) { let n = state.count + config.step; #{state:#{count:n},screen:view(n)} } fn tick(event, config) { #{text: \"Counter reminder\"} }"
+}

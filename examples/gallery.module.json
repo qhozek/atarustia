@@ -1,0 +1,16 @@
+{
+  "manifest": {
+    "name": "gallery",
+    "description": "HTTPS photo/video gallery with opaque paged callbacks",
+    "commands": [{"name":"gallery","description":"Open gallery","function":"gallery","permission":"owner","inline":true}],
+    "config": {
+      "first":"https://example.com/first.jpg",
+      "second":"https://example.com/second.jpg"
+    },
+    "validators": {
+      "first":{"type":"link"},
+      "second":{"type":"link"}
+    }
+  },
+  "source": "fn gallery(args, config) { #{screen:#{text:\"Gallery\",gallery:[#{kind:\"photo\",source:#{\"type\":\"url\",url:config.first}},#{kind:\"photo\",source:#{\"type\":\"url\",url:config.second}}],ttl_seconds:3600}} }"
+}
