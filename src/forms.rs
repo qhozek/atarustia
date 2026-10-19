@@ -57,6 +57,20 @@ pub enum Action {
     Help {
         module: Option<String>,
     },
+    HelpNavigate {
+        state: crate::help::State,
+    },
+    HelpToggle {
+        module: String,
+        state: crate::help::State,
+    },
+    HelpUnhideAll {
+        state: crate::help::State,
+    },
+    HelpSettings {
+        module: String,
+        state: crate::help::State,
+    },
     Update {
         current: String,
         incoming: String,
@@ -91,6 +105,8 @@ pub struct Screen {
     pub rich_button_appearance: Vec<crate::markup::Appearance>,
     pub close_button: bool,
     pub link_preview: bool,
+    #[serde(skip)]
+    pub help_state: Option<crate::help::State>,
 }
 impl Default for Screen {
     fn default() -> Self {
@@ -108,6 +124,7 @@ impl Default for Screen {
             rich_button_appearance: vec![],
             close_button: true,
             link_preview: true,
+            help_state: None,
         }
     }
 }
@@ -122,6 +139,7 @@ struct Unit {
     page: usize,
     rich_render: Option<String>,
     rich_failed: bool,
+    help_return: Option<crate::help::State>,
 }
 #[derive(Clone)]
 pub struct Gate {
@@ -365,6 +383,7 @@ impl Forms {
                 page: 0,
                 rich_render: None,
                 rich_failed: false,
+                help_return: None,
             },
         );
         let message = match self.render(&id, 0) {
@@ -382,6 +401,16 @@ impl Forms {
     }
     pub fn gate(&self, id: &str) -> Option<Gate> {
         self.units.get(id).and_then(|u| u.gate.clone())
+    }
+    pub fn help_return(&self, id: &str) -> Option<crate::help::State> {
+        self.units.get(id).and_then(|u| u.help_return.clone())
+    }
+    pub fn help_state(&self, id: &str) -> Option<crate::help::State> {
+        self.units.get(id).and_then(|u| u.screen.help_state.clone())
+    }
+    pub fn set_help_return(&mut self, id: &str, state: Option<crate::help::State>) -> Result<()> {
+        self.units.get_mut(id).context("form expired")?.help_return = state;
+        Ok(())
     }
     pub fn remove(&mut self, id: &str) -> bool {
         self.inputs.retain(|_, p| p.unit != id);
@@ -540,6 +569,10 @@ impl Forms {
                             | Action::Close
                             | Action::Module { .. }
                             | Action::Help { .. }
+                            | Action::HelpNavigate { .. }
+                            | Action::HelpToggle { .. }
+                            | Action::HelpUnhideAll { .. }
+                            | Action::HelpSettings { .. }
                             | Action::ConfigOpen { .. }
                             | Action::ConfigToggle { .. }
                             | Action::ConfigStep { .. }

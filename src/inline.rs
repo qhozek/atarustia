@@ -148,20 +148,22 @@ impl BotHandle {
     }
 }
 
-fn screen(context: &Context, page: usize) -> InputMessage {
-    let pages = crate::output::pages(&context.help());
-    let page = page.min(pages.len() - 1);
-    let mut buttons = Vec::new();
-    if page > 0 {
-        buttons.push(Button::data("‹", format!("help:{}", page - 1).into_bytes()));
-    }
-    if page + 1 < pages.len() {
-        buttons.push(Button::data("›", format!("help:{}", page + 1).into_bytes()));
-    }
-    buttons.push(Button::data("Config", b"config".to_vec()));
-    InputMessage::new()
-        .text(&pages[page])
-        .reply_markup(ReplyMarkup::from_buttons(&[buttons]))
+async fn screen(context: &Context, user: i64, page: usize) -> Result<InputMessage> {
+    let help = crate::help::build(
+        context,
+        user,
+        None,
+        &crate::help::State {
+            page,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let mut forms = context.forms.lock().unwrap();
+    let (id, _) = forms.create(help, user, vec![context.owner])?;
+    forms.plain_fallback(&id);
+    let input = forms.render(&id, 0)?;
+    Ok(input)
 }
 pub async fn run(
     connection: Connection,
@@ -305,7 +307,9 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             .await?;
                     }
                 }
-                if let Ok(screen) = crate::screens::config(context, &prompt.module) {
+                if let Ok(screen) =
+                    crate::screens::config_for_unit(context, &prompt.module, &prompt.unit)
+                {
                     let body = context.forms.lock().unwrap().replace(&prompt.unit, screen);
                     if let Ok(body) = body {
                         message.respond(body).await?;
@@ -343,14 +347,27 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 && owners.contains(&m.sender_id().map(|s| s.bare_id_unchecked()).unwrap_or(0)) =>
         {
             if m.text() == "/start" || m.text() == "/help" {
-                let screen = crate::screens::help(context, None)?;
-                let (_, body) = context.forms.lock().unwrap().create(
+                let screen = crate::help::build(
+                    context,
+                    m.sender_id()
+                        .map(|id| id.bare_id_unchecked())
+                        .unwrap_or(context.owner),
+                    None,
+                    &Default::default(),
+                )
+                .await?;
+                let (id, _) = context.forms.lock().unwrap().create(
                     screen,
                     m.sender_id()
                         .map(|s| s.bare_id_unchecked())
                         .unwrap_or(context.owner),
                     vec![context.owner],
                 )?;
+                let body = {
+                    let mut forms = context.forms.lock().unwrap();
+                    forms.plain_fallback(&id);
+                    forms.render(&id, 0)?
+                };
                 m.respond(body).await?;
             }
         }
@@ -376,7 +393,19 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 if !owners.contains(&q.sender_id().bare_id_unchecked()) {
                     let gate = context.forms.lock().unwrap().gate(&click.unit);
                     anyhow::ensure!(
-                        gate.is_some(),
+                        gate.is_some()
+                            || matches!(
+                                &click.action,
+                                crate::forms::Action::HelpNavigate { .. }
+                                    | crate::forms::Action::Help { .. }
+                                    | crate::forms::Action::Close
+                                    | crate::forms::Action::Page { .. }
+                            ) && crate::security_commands::inline_allowed(
+                                &context.db,
+                                context.owner,
+                                q.sender_id().bare_id_unchecked(),
+                                "help"
+                            ),
                         "delegated form has no originating permission gate"
                     );
                     if let Some(gate) = gate {
@@ -413,6 +442,18 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         return Ok(());
                     }
                     Action::Page { page } => {
+                        let state = context.forms.lock().unwrap().help_state(&click.unit);
+                        if let Some(state) = state {
+                            let gate = context.forms.lock().unwrap().gate(&click.unit);
+                            let screen = crate::help::build(
+                                context,
+                                q.sender_id().bare_id_unchecked(),
+                                gate.as_ref().map(|g| &g.message),
+                                &state,
+                            )
+                            .await?;
+                            context.forms.lock().unwrap().replace(&click.unit, screen)?;
+                        }
                         context.forms.lock().unwrap().render(&click.unit, page)?
                     }
                     Action::Close => {
@@ -421,16 +462,19 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             .text("✕")
                             .reply_markup(ReplyMarkup::from_buttons(&[]))
                     }
-                    Action::Help { module } => {
-                        let s = crate::screens::help(context, module.as_deref())?;
-                        context.forms.lock().unwrap().replace(&click.unit, s)?
+                    action @ (Action::Help { .. }
+                    | Action::HelpNavigate { .. }
+                    | Action::HelpToggle { .. }
+                    | Action::HelpUnhideAll { .. }
+                    | Action::HelpSettings { .. }) => {
+                        crate::help::callback(context, &q, &click.unit, action).await?
                     }
                     Action::ConfigOpen { module } => {
                         anyhow::ensure!(
                             owners.contains(&q.sender_id().bare_id_unchecked()),
                             "owner only configuration"
                         );
-                        let s = crate::screens::config(context, &module)?;
+                        let s = crate::screens::config_for_unit(context, &module, &click.unit)?;
                         context.forms.lock().unwrap().replace(&click.unit, s)?
                     }
                     Action::ConfigSet { module, key, value } => {
@@ -439,7 +483,8 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             "owner only configuration"
                         );
                         crate::screens::set_config(context, &module, &key, value)?;
-                        let screen = crate::screens::config(context, &module)?;
+                        let screen =
+                            crate::screens::config_for_unit(context, &module, &click.unit)?;
                         context.forms.lock().unwrap().replace(&click.unit, screen)?
                     }
                     Action::ConfigInput { module, key } => {
@@ -488,7 +533,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             _ => (None, false),
                         };
                         crate::screens::apply_config(context, &module, &key, step, reset)?;
-                        let s = crate::screens::config(context, &module)?;
+                        let s = crate::screens::config_for_unit(context, &module, &click.unit)?;
                         context.forms.lock().unwrap().replace(&click.unit, s)?
                     }
                     Action::Module {
@@ -562,7 +607,9 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 .strip_prefix("help:")
                 .and_then(|s| s.parse::<usize>().ok())
             {
-                q.answer().edit(screen(context, page)).await?;
+                q.answer()
+                    .edit(screen(context, q.sender_id().bare_id_unchecked(), page).await?)
+                    .await?;
             } else if data == "config" {
                 q.answer().edit(InputMessage::new().text(format!("Prefix: {}\nLanguage: {}\nUse {}config in Saved Messages to edit module settings.",context.db.prefix(),context.db.language(),context.db.prefix())).reply_markup(ReplyMarkup::from_buttons(&[vec![Button::data("‹ Help",b"help:0".to_vec())]]))).await?;
             } else {
@@ -668,7 +715,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
             let body = if q.text().trim() == "ping" {
                 InputMessage::new().text("Pong 🦀")
             } else {
-                screen(context, 0)
+                screen(context, q.sender_id().bare_id_unchecked(), 0).await?
             };
             q.answer([Article::new("atarustia", body).description("Native Rust userbot")])
                 .private()

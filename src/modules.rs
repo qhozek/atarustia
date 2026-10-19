@@ -54,6 +54,8 @@ pub struct Manifest {
     pub libraries: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub validators: std::collections::BTreeMap<String, crate::validators::Validator>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<crate::help::Metadata>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -165,6 +167,9 @@ pub fn digest(bytes: &[u8]) -> String {
 }
 impl Package {
     pub fn validate(&self) -> Result<()> {
+        if let Some(metadata) = &self.manifest.help {
+            metadata.validate()?;
+        }
         ensure!(
             valid_name(&self.manifest.name),
             "module name must be lowercase ASCII letters, digits or _"

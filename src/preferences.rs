@@ -118,14 +118,19 @@ pub async fn execute(ctx: &Context, m: &Message, cmd: &str, args: &str) -> Resul
     let text = match cmd {
         "helphide" => {
             ensure!(!args.is_empty(), "usage: helphide <module...>");
-            let modules = ctx.modules.lock().unwrap().list();
+            let modules = crate::help::catalog(ctx).modules;
             let mut result = vec![];
             for name in args.split_whitespace() {
                 ensure!(
-                    modules.iter().any(|m| m.name == name),
-                    "unknown external module"
+                    modules.iter().any(|m| m.name.eq_ignore_ascii_case(name)),
+                    "unknown module"
                 );
-                let hidden = toggle(&ctx.db, "atarustia.help", "hidden", json!(name))?;
+                let name = &modules
+                    .iter()
+                    .find(|m| m.name.eq_ignore_ascii_case(name))
+                    .unwrap()
+                    .name;
+                let hidden = crate::help::toggle_hidden(ctx, name)?;
                 result.push(format!(
                     "{name}: {}",
                     if hidden { "hidden" } else { "visible" }

@@ -14,64 +14,23 @@ fn button(text: impl Into<String>, action: Action) -> Key {
     }
 }
 pub fn help(ctx: &Context, module: Option<&str>) -> Result<Screen> {
-    if let Some(name) = module {
-        let p = ctx
-            .modules
-            .lock()
-            .unwrap()
-            .export()
-            .into_iter()
-            .find(|p| p.manifest.name == name)
-            .context("unknown module")?;
-        let mut text = format!(
-            "<b>{}</b>\n{}\n\n",
-            escape(name),
-            escape(&p.manifest.description)
-        );
-        for cmd in p.manifest.commands {
-            text.push_str(&format!(
-                "<code>{}{}</code> — {}\n",
-                escape(&ctx.db.prefix()),
-                escape(&cmd.name),
-                escape(&cmd.description)
-            ));
-        }
-        return with_help_banner(
-            ctx,
-            Screen {
-                text,
-                html: true,
-                buttons: vec![vec![
-                    button(
-                        ctx.tr("config", &[]),
-                        Action::ConfigOpen {
-                            module: name.into(),
-                        },
-                    ),
-                    button(ctx.tr("back", &[]), Action::Help { module: None }),
-                ]],
-                ..Default::default()
-            },
-        );
-    }
-    let mut rows = vec![];
-    for module in ctx.modules.lock().unwrap().list() {
-        if !crate::preferences::hidden(&ctx.db, &module.name) {
-            rows.push(vec![button(
-                module.name.clone(),
-                Action::Help {
-                    module: Some(module.name),
-                },
-            )]);
-        }
-    }
-    with_help_banner(
-        ctx,
-        Screen {
-            text: ctx.help(),
-            buttons: rows.into_iter().take(30).collect(),
-            ..Default::default()
+    crate::help::render(
+        &crate::help::catalog(ctx),
+        &crate::help::State::parse(module.unwrap_or(""))?,
+        crate::help::Ui {
+            english: ctx.db.language().split_whitespace().next() == Some("en"),
+            premium: ctx
+                .db
+                .get("RustRuntime", "premium")
+                .as_bool()
+                .unwrap_or(false),
         },
+        &ctx.db.prefix(),
+        ctx.username.as_deref().unwrap_or("bot"),
+        true,
+        false,
+        &serde_json::from_value(ctx.db.get("Settings", "aliases")).unwrap_or_default(),
+        &crate::info::Config::load(&ctx.db)?.help_banner_url,
     )
 }
 pub fn config(ctx: &Context, module: &str) -> Result<Screen> {
@@ -238,6 +197,16 @@ pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Resul
     }
     ctx.db.set(module, "__config__", config)
 }
+pub fn config_for_unit(ctx: &Context, module: &str, unit: &str) -> Result<Screen> {
+    let mut screen = config(ctx, module)?;
+    if let Some(state) = ctx.forms.lock().unwrap().help_return(unit) {
+        screen.buttons.push(vec![button(
+            format!("‹ {}", ctx.tr("help", &[])),
+            Action::HelpNavigate { state },
+        )]);
+    }
+    Ok(screen)
+}
 pub fn apply_config(
     ctx: &Context,
     module: &str,
@@ -301,20 +270,4 @@ pub fn config_data(ctx: &Context, module: &str) -> Result<ConfigData> {
         package.manifest.config,
         package.manifest.validators,
     ))
-}
-fn with_help_banner(ctx: &Context, mut screen: Screen) -> Result<Screen> {
-    let url = crate::info::Config::load(&ctx.db)?.help_banner_url;
-    if !url.is_empty() {
-        let text = if screen.html {
-            screen.text.clone()
-        } else {
-            escape(&screen.text)
-        };
-        screen.rich_html = Some(format!(
-            "<img src=\"{}\"/>\n{}",
-            escape(&url),
-            text.replace('\n', "<br>")
-        ));
-    }
-    Ok(screen)
 }

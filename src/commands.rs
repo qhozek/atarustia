@@ -46,7 +46,10 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ),
     ("clearmodules", "confirm — удалить все внешние модули"),
     ("settings", "настройки аккаунта"),
-    ("help", "[module] — список команд"),
+    (
+        "help",
+        "[module|command] [-f|-c|-l] — каталог и карточки модулей",
+    ),
     ("info", "информация о сборке"),
     ("atarustia", "информация о платформе"),
     ("ping", "проверить отклик"),
@@ -491,6 +494,10 @@ impl Context {
         Ok(())
     }
     async fn execute(&self, m: &Message, name: &str, args: &str) -> Result<Option<String>> {
+        if name == "help" {
+            crate::help::send(self, m, args).await?;
+            return Ok(None);
+        }
         if matches!(name, "update" | "restart") {
             crate::update_flow::command(self, m, name, args).await?;
             return Ok(None);
@@ -499,12 +506,8 @@ impl Context {
             crate::info::send(self, m).await?;
             return Ok(None);
         }
-        if matches!(name, "help" | "config" | "settings") {
-            let screen = if name == "help" {
-                crate::screens::help(self, if args.is_empty() { None } else { Some(args) })
-            } else {
-                crate::screens::config(self, args)
-            };
+        if matches!(name, "config" | "settings") {
+            let screen = crate::screens::config(self, args);
             if let (Ok(screen), Some(bot)) = (screen, self.bot.read().await.clone())
                 && bot.form(self, m, screen).await.is_ok()
             {
@@ -742,7 +745,6 @@ impl Context {
                 .await??;
                 format!("Контент-форум готов: {id}")
             }
-            "help" => self.help(),
             "ping" => format!("Pong 🦀 · uptime {}s", self.start.elapsed().as_secs()),
             "source" => self.tr("source", &[]),
             "setprefix" => {

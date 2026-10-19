@@ -18,6 +18,85 @@ struct Fixture {
     ctx: Arc<Context>,
 }
 #[tokio::test]
+async fn help_catalogue_and_permissions_are_recomputed_after_revocation() {
+    let f = Fixture::new();
+    f.install(include_str!("../examples/counter.module.json"));
+    let owner = atarustia::help::build(&f.ctx, 1, None, &Default::default())
+        .await
+        .unwrap();
+    owner.validate().unwrap();
+    assert!(owner.text.contains("counter"));
+    let public = atarustia::help::build(
+        &f.ctx,
+        2,
+        None,
+        &atarustia::help::State {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!public.text.contains("counter"));
+    f.ctx
+        .db
+        .set("atarustia.security", "masks", json!({"counter":"everyone"}))
+        .unwrap();
+    let allowed = atarustia::help::build(
+        &f.ctx,
+        2,
+        None,
+        &atarustia::help::State {
+            module: Some("counter".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(allowed.text.contains(".counter"));
+    f.ctx
+        .db
+        .set("atarustia.security", "masks", json!({"counter":"owner"}))
+        .unwrap();
+    let revoked = atarustia::help::build(
+        &f.ctx,
+        2,
+        None,
+        &atarustia::help::State {
+            module: Some("counter".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!revoked.text.contains(".counter"));
+    assert!(atarustia::help::toggle_hidden(&f.ctx, "atarustiaInfo").unwrap());
+    assert!(atarustia::preferences::hidden(&f.ctx.db, "atarustiaInfo"));
+    let (unit, _) = f
+        .ctx
+        .forms
+        .lock()
+        .unwrap()
+        .create(owner, 1, vec![])
+        .unwrap();
+    let state = atarustia::help::State {
+        module: Some("counter".into()),
+        page: 2,
+        ..Default::default()
+    };
+    f.ctx
+        .forms
+        .lock()
+        .unwrap()
+        .set_help_return(&unit, Some(state.clone()))
+        .unwrap();
+    let config = atarustia::screens::config_for_unit(&f.ctx, "counter", &unit).unwrap();
+    assert!(config.buttons.iter().flatten().any(
+        |k| matches!(&k.action,Some(atarustia::forms::Action::HelpNavigate{state:s}) if s==&state)
+    ));
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
 async fn core_info_settings_share_ui_validation_and_persistence() {
     let f = Fixture::new();
     let module = atarustia::info::MODULE;
@@ -62,10 +141,11 @@ async fn core_info_settings_share_ui_validation_and_persistence() {
     assert!(help.rich_html.unwrap().contains("assets/atarustia.png"));
     atarustia::screens::set_config(&f.ctx, module, "help_banner_url", json!("")).unwrap();
     assert!(
-        atarustia::screens::help(&f.ctx, None)
+        !atarustia::screens::help(&f.ctx, None)
             .unwrap()
             .rich_html
-            .is_none()
+            .unwrap()
+            .contains("<img")
     );
     f.connection.close().await.unwrap();
 }

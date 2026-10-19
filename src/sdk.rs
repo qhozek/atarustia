@@ -26,6 +26,9 @@ pub enum Response {
 pub trait Module: Send + Sync + 'static {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
+    fn help_metadata(&self) -> crate::help::Metadata {
+        Default::default()
+    }
     fn commands(&self) -> Vec<Command> {
         vec![]
     }
@@ -54,6 +57,7 @@ pub struct Registry {
 }
 impl Registry {
     pub fn register(&mut self, module: Arc<dyn Module>) -> Result<()> {
+        module.help_metadata().validate()?;
         anyhow::ensure!(
             crate::modules::valid_name(module.name()),
             "invalid native module name"

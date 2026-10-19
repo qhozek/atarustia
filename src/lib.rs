@@ -19,6 +19,7 @@ pub mod dispatcher;
 pub mod file_id;
 pub mod forms;
 pub mod gift_payload;
+pub mod help;
 pub mod i18n;
 pub mod info;
 pub mod inline;
