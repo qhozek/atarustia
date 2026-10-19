@@ -20,6 +20,7 @@ pub mod file_id;
 pub mod forms;
 pub mod gift_payload;
 pub mod i18n;
+pub mod info;
 pub mod inline;
 pub mod inline_content;
 pub mod jobs;

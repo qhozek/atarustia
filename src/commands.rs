@@ -491,6 +491,10 @@ impl Context {
         Ok(())
     }
     async fn execute(&self, m: &Message, name: &str, args: &str) -> Result<Option<String>> {
+        if matches!(name, "info" | "atarustia") {
+            crate::info::send(self, m).await?;
+            return Ok(None);
+        }
         if matches!(name, "help" | "config" | "settings") {
             let screen = if name == "help" {
                 crate::screens::help(self, if args.is_empty() { None } else { Some(args) })
@@ -765,17 +769,6 @@ impl Context {
                 format!("Контент-форум готов: {id}")
             }
             "help" => self.help(),
-            "info" | "atarustia" => format!(
-                "⛈ atarustia · Rust {}\nMTProto: grammers 0.11\nAccount: {}\nOS: {} / {}\nUptime: {}s\nPrefix: {}\nModules: {}\nNative shell: {}",
-                env!("CARGO_PKG_VERSION"),
-                self.owner,
-                std::env::consts::OS,
-                std::env::consts::ARCH,
-                self.start.elapsed().as_secs(),
-                self.db.prefix(),
-                self.modules.lock().unwrap().list().len(),
-                self.allow_shell
-            ),
             "ping" => format!("Pong 🦀 · uptime {}s", self.start.elapsed().as_secs()),
             "source" => self.tr("source", &[]),
             "setprefix" => {
@@ -857,20 +850,7 @@ impl Context {
                         &json!({"prefix":self.db.prefix(),"language":self.db.language(),"backup_hours":self.db.get("RustBackup","hours"),"shell_enabled":self.allow_shell,"modules":self.modules.lock().unwrap().list()}),
                     )?
                 } else {
-                    let module = self
-                        .modules
-                        .lock()
-                        .unwrap()
-                        .export()
-                        .into_iter()
-                        .find(|p| p.manifest.name == args)
-                        .context("unknown module")?;
-                    let saved = self.db.get(args, "__config__");
-                    serde_json::to_string_pretty(&if saved.is_null() {
-                        module.manifest.config
-                    } else {
-                        saved
-                    })?
+                    serde_json::to_string_pretty(&crate::screens::config_data(self, args)?.0)?
                 }
             }
             "fconfig" => {
@@ -879,30 +859,7 @@ impl Context {
                 let key = parts.next().context("key missing")?;
                 let value: Value =
                     serde_json::from_str(parts.next().context("JSON value missing")?)?;
-                let package = self
-                    .modules
-                    .lock()
-                    .unwrap()
-                    .export()
-                    .into_iter()
-                    .find(|p| p.manifest.name == module)
-                    .context("unknown module")?;
-                let value = if let Some(validator) = package.manifest.validators.get(key) {
-                    validator.validate(value)?
-                } else {
-                    value
-                };
-                let saved = self.db.get(module, "__config__");
-                let mut config = if saved.is_null() {
-                    package.manifest.config
-                } else {
-                    saved
-                };
-                config
-                    .as_object_mut()
-                    .context("module config is not an object")?
-                    .insert(key.into(), value);
-                self.db.set(module, "__config__", config)?;
+                crate::screens::set_config(self, module, key, value)?;
                 self.tr("config_saved", &[])
             }
             "modules" => {

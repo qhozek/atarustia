@@ -11,7 +11,7 @@ cargo test --locked --doc
 ```
 
 Набор покрывает dispatcher/security, encrypted sessions/storage, web access/login states, модули/формы,
-media/file IDs, Bot requests/responses/objects, migration и MTProxy. Python fixtures содержат только
+media/file IDs, Bot requests/responses/objects, migration, `.info` layout/config/host metrics и MTProxy. Python fixtures содержат только
 синтетические данные. Тесты TCP/TLS прокси работают на loopback, без внешнего Telegram.
 
 CI повторяет проверки на Linux и Windows. Живые login/BotFather/business/media/DC сценарии в этот набор не входят.

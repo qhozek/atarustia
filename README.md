@@ -108,6 +108,22 @@ PowerShell: `$env:ATARUSTIA_API_ID='12345'`, `$env:ATARUSTIA_API_HASH='...'`.
 Полная справка доступна в Telegram. Загруженный пакет не выполняется до `.approve <sha256>`.
 Формат модулей и Rust SDK — [docs/MODULES.md](docs/MODULES.md). Python-файлы не исполняются.
 
+### Карточка `.info`
+
+`.info` и `.atarustia` показывают владельца, версию, ветку/коммит, обновления, префикс, аптайм,
+CPU/RAM, ядро и ОС. Баннер и оформление настраиваются в `.config atarustiaInfo`.
+
+```text
+.fconfig atarustiaInfo rich_mode true
+.fconfig atarustiaInfo banner_url "https://example.com/banner.png"
+.fconfig atarustiaInfo custom_message "<b>{me}</b> · {uptime} · {ram_usage}"
+```
+
+Пустой `banner_url` выключает картинку; `custom_message: null` возвращает стандартный текст.
+`quote_media` переключает preview/фото, `invert_media` ставит картинку над текстом.
+`help_banner_url` задаёт баннер rich-экрана справки. Rich-режим и custom emoji зависят от Premium;
+при явном отказе Telegram карточка переходит на обычное оформление. Подробнее — [docs/INFO.md](docs/INFO.md).
+
 ## Обновление
 
 `.update` получает изменения из `origin` и показывает коммиты и diff.

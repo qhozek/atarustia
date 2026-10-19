@@ -17,6 +17,58 @@ struct Fixture {
     connection: Connection,
     ctx: Arc<Context>,
 }
+#[tokio::test]
+async fn core_info_settings_share_ui_validation_and_persistence() {
+    let f = Fixture::new();
+    let module = atarustia::info::MODULE;
+    atarustia::screens::config(&f.ctx, module)
+        .unwrap()
+        .validate()
+        .unwrap();
+    atarustia::screens::apply_config(&f.ctx, module, "rich_mode", None, false).unwrap();
+    assert!(atarustia::info::Config::load(&f.ctx.db).unwrap().rich_mode);
+    let before = f.ctx.db.get(module, "__config__");
+    assert!(
+        atarustia::screens::set_config(&f.ctx, module, "banner_url", json!("file:///secret"))
+            .is_err()
+    );
+    assert!(
+        atarustia::screens::set_config(&f.ctx, module, "custom_message", json!("{unknown}"))
+            .is_err()
+    );
+    assert!(
+        atarustia::screens::set_config(&f.ctx, module, "rich_mode", json!("not-a-bool")).is_err()
+    );
+    assert_eq!(before, f.ctx.db.get(module, "__config__"));
+    atarustia::screens::set_config(
+        &f.ctx,
+        module,
+        "custom_message",
+        json!("<b>{me}</b> · {uptime}"),
+    )
+    .unwrap();
+    atarustia::screens::apply_config(&f.ctx, module, "rich_mode", None, true).unwrap();
+    let reopened = Database::open(f.dir.path(), 1).unwrap();
+    assert!(!atarustia::info::Config::load(&reopened).unwrap().rich_mode);
+    assert_eq!(
+        atarustia::info::Config::load(&reopened)
+            .unwrap()
+            .custom_message
+            .as_deref(),
+        Some("<b>{me}</b> · {uptime}")
+    );
+    let help = atarustia::screens::help(&f.ctx, None).unwrap();
+    help.validate().unwrap();
+    assert!(help.rich_html.unwrap().contains("assets/atarustia.png"));
+    atarustia::screens::set_config(&f.ctx, module, "help_banner_url", json!("")).unwrap();
+    assert!(
+        atarustia::screens::help(&f.ctx, None)
+            .unwrap()
+            .rich_html
+            .is_none()
+    );
+    f.connection.close().await.unwrap();
+}
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
