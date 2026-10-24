@@ -384,8 +384,9 @@ impl Context {
                 config
             };
             let state = self.db.get(&module_name, "state");
+            let language = self.db.language();
             match tokio::task::spawn_blocking(move || {
-                package.run_command(&name, &args, config, state)
+                package.run_command(&name, &args, config, state, &language)
             })
             .await?
             {
@@ -393,6 +394,46 @@ impl Context {
                 Ok(effect) => {
                     if let Some(state) = effect.state {
                         self.db.set(&module_name, "state", state)?;
+                    }
+                    if !effect.frames.is_empty() {
+                        let delay =
+                            std::time::Duration::from_millis(u64::from(if effect.frame_ms == 0 {
+                                1000
+                            } else {
+                                effect.frame_ms
+                            }));
+                        let peer = telegram::peer(&message).await?;
+                        let clean = |frame: &str| {
+                            self.logs
+                                .redact(crate::output::censor(frame.to_owned(), &self.secrets))
+                        };
+                        let animated = self
+                            .client
+                            .send_message(
+                                peer,
+                                grammers_client::message::InputMessage::new()
+                                    .text(clean(&effect.frames[0]))
+                                    .reply_to(Some(message.id())),
+                            )
+                            .await?;
+                        for frame in effect.frames.iter().skip(1) {
+                            tokio::select! {
+                                _=self.stop.cancelled()=>break,
+                                _=tokio::time::sleep(delay)=>{}
+                            }
+                            if animated
+                                .edit(
+                                    grammers_client::message::InputMessage::new()
+                                        .text(clean(frame)),
+                                )
+                                .await
+                                .is_err()
+                            {
+                                tracing::debug!("animation edit failed");
+                                break;
+                            }
+                        }
+                        return Ok(());
                     }
                     if let Some(media) = &effect.media {
                         let caption = self.logs.redact(effect.text.clone().unwrap_or_default());
@@ -847,7 +888,9 @@ impl Context {
                 }
             }
             "dlm" => {
-                let p = crate::modules::download(args).await?;
+                let mut p = crate::modules::download(args).await?;
+                crate::modules::resolve_packurl(&mut p).await?;
+                self.check_scope(&p.manifest.scope).await?;
                 let manifest = serde_json::to_string_pretty(&p.manifest)?;
                 let hash = self.modules.lock().unwrap().stage(p)?;
                 format!(
@@ -857,8 +900,10 @@ impl Context {
             }
             "lm" => {
                 let bytes = self.reply_bytes(m, 512 * 1024).await?;
-                let p: crate::modules::Package = serde_json::from_slice(&bytes)
+                let mut p: crate::modules::Package = serde_json::from_slice(&bytes)
                     .context("expected a .module.json package, not Python")?;
+                crate::modules::resolve_packurl(&mut p).await?;
+                self.check_scope(&p.manifest.scope).await?;
                 let hash = self.modules.lock().unwrap().stage(p)?;
                 format!(
                     "Проверь пакет. Для установки: {}approve {hash}",
@@ -875,6 +920,7 @@ impl Context {
                         .all(|c| self.native.command(&c.name).is_none()),
                     "package command conflicts with a native Rust module"
                 );
+                self.check_scope(&pending.manifest.scope).await?;
                 self.modules.lock().unwrap().approve(args)?;
                 // Installed revisions may have changed the implementation behind existing buttons.
                 self.forms.lock().unwrap().clear();
@@ -1105,6 +1151,29 @@ impl Context {
         };
         Ok(Some(text))
     }
+    /// Verifies a package's `scope` requirements before it is staged or installed.
+    async fn check_scope(&self, scope: &[String]) -> Result<()> {
+        for need in scope {
+            match need.as_str() {
+                "inline" => ensure!(
+                    self.bot.read().await.is_some(),
+                    "module requires the inline bot, which is not running"
+                ),
+                "shell" => ensure!(self.allow_shell, "module requires --allow-shell"),
+                "ffmpeg" => {
+                    let present = std::process::Command::new("ffmpeg")
+                        .arg("-version")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    ensure!(present, "module requires ffmpeg, which is not installed");
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     pub async fn handle_event(&self, event: crate::modules::Event) -> Result<()> {
         if self
             .db
@@ -1139,8 +1208,9 @@ impl Context {
                 let state = self.db.get(&package.manifest.name, "state");
                 let p = package.clone();
                 let data = serde_json::to_value(&event)?;
+                let language = self.db.language();
                 let effect = tokio::task::spawn_blocking(move || {
-                    p.run_event(&watcher.function, data, config, state)
+                    p.run_event(&watcher.function, data, config, state, &language)
                 })
                 .await??;
                 if let Some(state) = effect.state {
@@ -1222,6 +1292,16 @@ impl Context {
         {
             return Ok(());
         }
+        if let Some(clause) = &task.stop_clause
+            && self
+                .db
+                .get(&package.manifest.name, "state")
+                .get(clause)
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
+            return Ok(());
+        }
         let config = self.db.get(&package.manifest.name, "__config__");
         let config = if config.is_null() {
             package.manifest.config.clone()
@@ -1230,12 +1310,14 @@ impl Context {
         };
         let state = self.db.get(&package.manifest.name, "state");
         let name = package.manifest.name.clone();
+        let language = self.db.language();
         let effect = tokio::task::spawn_blocking(move || {
             package.run_event(
                 &task.function,
                 json!({"kind":"loop","time":security::now()}),
                 config,
                 state,
+                &language,
             )
         })
         .await??;

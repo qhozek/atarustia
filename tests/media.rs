@@ -108,6 +108,7 @@ fn module_gallery_round_trip_without_network() {
             "",
             p.manifest.config.clone(),
             serde_json::Value::Null,
+            "en",
         )
         .unwrap();
     let screen = effect.screen.unwrap();
@@ -224,6 +225,7 @@ fn all_examples_with_media_validate() {
             "",
             package.manifest.config.clone(),
             serde_json::Value::Null,
+            "en",
         )
         .unwrap();
     assert_eq!(effect.screen.unwrap().gallery.len(), 2);

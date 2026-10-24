@@ -261,7 +261,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
         crate::bot_events::from_update(&update, bot_id).filter(|event| event.name != "bot_message")
     {
         let data = event.data;
-        let event = crate::modules::Event {
+        let mut event = crate::modules::Event {
             text: data
                 .get("text")
                 .and_then(serde_json::Value::as_str)
@@ -275,7 +275,12 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
             id: event.message_id.unwrap_or(0),
             kind: event.name,
             data,
+            ..Default::default()
         };
+        if let Ok(converted) = serde_json::from_value::<crate::botapi::Message>(event.data.clone())
+        {
+            event.enrich_from_botapi(&converted);
+        }
         context.handle_event(event).await?;
     }
     if let Update::NewMessage(message) = &update {
@@ -319,7 +324,8 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 return Ok(());
             }
         }
-        let event = crate::modules::Event {
+        let converted = crate::botapi::Message::from_native(message);
+        let mut event = crate::modules::Event {
             text: message.text().into(),
             chat: message.peer_id().bot_api_dialog_id_unchecked(),
             sender: message
@@ -331,8 +337,10 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
             edited: false,
             id: message.id(),
             kind: "bot_message".into(),
-            data: serde_json::to_value(crate::botapi::Message::from_native(message))?,
+            data: serde_json::to_value(&converted)?,
+            ..Default::default()
         };
+        event.enrich_from_botapi(&converted);
         if !matches!(
             message.peer(),
             Some(grammers_client::peer::Peer::Channel(_))
@@ -559,8 +567,9 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         };
                         let state = context.db.get(&module, "state");
                         let event = serde_json::json!({"kind":"callback","user":q.sender_id().bare_id_unchecked(),"args":args});
+                        let language = context.db.language();
                         let effect = tokio::task::spawn_blocking(move || {
-                            p.run_event(&function, event, config, state)
+                            p.run_event(&function, event, config, state, &language)
                         })
                         .await??;
                         if let Some(s) = effect.state {
@@ -664,8 +673,9 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     saved
                 };
                 let state = context.db.get(&module, "state");
+                let language = context.db.language();
                 let effect = tokio::task::spawn_blocking(move || {
-                    package.run_command(&name, &args, config, state)
+                    package.run_command(&name, &args, config, state, &language)
                 })
                 .await??;
                 // Inline previews must never mutate module state: typing a query is not execution consent.

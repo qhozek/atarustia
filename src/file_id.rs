@@ -29,6 +29,19 @@ pub enum FileKind {
     VideoNote,
 }
 impl FileKind {
+    /// Lowercase media name shared with watcher filters.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Photo => "photo",
+            Self::Document => "document",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Voice => "voice",
+            Self::Animation => "animation",
+            Self::Sticker => "sticker",
+            Self::VideoNote => "video_note",
+        }
+    }
     pub fn code(self) -> i32 {
         match self {
             Self::Photo => 2,

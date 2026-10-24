@@ -56,16 +56,54 @@ pub struct Manifest {
     pub validators: std::collections::BTreeMap<String, crate::validators::Validator>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<crate::help::Metadata>,
+    /// Runtime requirements checked before install: ffmpeg, inline, shell.
+    #[serde(default)]
+    pub scope: Vec<String>,
+    /// Module strings: language → key → text, exposed to scripts as `strings`.
+    #[serde(default)]
+    pub strings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// HTTPS JSON pack ({language: {key: text}}) fetched into `strings` on install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packurl: Option<String>,
+}
+impl Manifest {
+    /// Strings of `language` merged over the English fallback.
+    pub fn strings_for(&self, language: &str) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        for (key, value) in self.strings.get("en").into_iter().flatten() {
+            map.insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+        for (key, value) in self.strings.get(language).into_iter().flatten() {
+            map.insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+        serde_json::Value::Object(map)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Watcher {
     pub function: String,
+    /// Filter values are tri-state: `null` accepts everything, `true`/`false`
+    /// keeps only matching/non-matching events.
     pub outgoing: Option<bool>,
     pub commands: Option<bool>,
     pub private: Option<bool>,
+    pub groups: Option<bool>,
+    pub channels: Option<bool>,
+    pub forwards: Option<bool>,
+    pub reply: Option<bool>,
+    pub mention: Option<bool>,
+    pub inline: Option<bool>,
+    pub media: Option<bool>,
+    pub photos: Option<bool>,
+    pub videos: Option<bool>,
+    pub audios: Option<bool>,
+    pub docs: Option<bool>,
+    pub stickers: Option<bool>,
     pub contains: Option<String>,
     pub startswith: Option<String>,
+    pub endswith: Option<String>,
+    pub regex: Option<String>,
     pub sender: Option<i64>,
     pub chat: Option<i64>,
     pub event: String,
@@ -77,12 +115,88 @@ impl Default for Watcher {
             outgoing: None,
             commands: None,
             private: None,
+            groups: None,
+            channels: None,
+            forwards: None,
+            reply: None,
+            mention: None,
+            inline: None,
+            media: None,
+            photos: None,
+            videos: None,
+            audios: None,
+            docs: None,
+            stickers: None,
             contains: None,
             startswith: None,
+            endswith: None,
+            regex: None,
             sender: None,
             chat: None,
             event: "message".into(),
         }
+    }
+}
+impl Watcher {
+    pub fn accepts(&self, event: &Event) -> bool {
+        self.event == event.kind
+            && self.outgoing.is_none_or(|v| v == event.outgoing)
+            && self.commands.is_none_or(|v| v == event.command)
+            && self
+                .private
+                .is_none_or(|v| v == (event.chat_kind == "private"))
+            && self
+                .groups
+                .is_none_or(|v| v == matches!(event.chat_kind.as_str(), "group" | "supergroup"))
+            && self
+                .channels
+                .is_none_or(|v| v == (event.chat_kind == "channel"))
+            && self.forwards.is_none_or(|v| v == event.forward)
+            && self.reply.is_none_or(|v| v == event.reply)
+            && self.mention.is_none_or(|v| v == event.mention)
+            && self.inline.is_none_or(|v| v == event.via_bot)
+            && self.media.is_none_or(|v| v == event.media.is_some())
+            && media_tag(self.photos, event, "photo")
+            && media_tag(self.videos, event, "video")
+            && media_tag(self.audios, event, "audio")
+            && media_tag(self.docs, event, "document")
+            && media_tag(self.stickers, event, "sticker")
+            && self
+                .contains
+                .as_ref()
+                .is_none_or(|v| event.text.contains(v))
+            && self
+                .startswith
+                .as_ref()
+                .is_none_or(|v| event.text.starts_with(v))
+            && self
+                .endswith
+                .as_ref()
+                .is_none_or(|v| event.text.ends_with(v))
+            && self
+                .regex
+                .as_ref()
+                .is_none_or(|v| regex::Regex::new(v).is_ok_and(|re| re.is_match(&event.text)))
+            && self.sender.is_none_or(|v| event.sender == Some(v))
+            && self.chat.is_none_or(|v| dialog_matches(v, event.chat))
+    }
+}
+/// `true`/`false` keeps only/excludes messages of exactly this media kind.
+fn media_tag(expected: Option<bool>, event: &Event, kind: &str) -> bool {
+    expected.is_none_or(|v| v == (event.media.as_deref() == Some(kind)))
+}
+/// Compares a filter id with a Bot API dialog id, accepting bare ids too
+/// (`-100…` and `…` both match a channel, like the Python original).
+fn dialog_matches(filter: i64, chat: i64) -> bool {
+    filter == chat || bare_dialog_id(filter) == bare_dialog_id(chat)
+}
+fn bare_dialog_id(id: i64) -> i64 {
+    if id < -1_000_000_000_000 {
+        -id - 1_000_000_000_000
+    } else if id < 0 {
+        -id
+    } else {
+        id
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -92,8 +206,14 @@ pub struct Loop {
     pub interval_seconds: u64,
     #[serde(default)]
     pub autostart: bool,
+    /// Sleep before the first iteration instead of running it immediately.
+    #[serde(default)]
+    pub wait_before: bool,
+    /// Database key set to `true` on loop start; the loop stops once it is `false`.
+    #[serde(default)]
+    pub stop_clause: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Event {
     pub text: String,
     pub chat: i64,
@@ -105,23 +225,33 @@ pub struct Event {
     pub kind: String,
     #[serde(default)]
     pub data: serde_json::Value,
+    /// Watcher-filter facts, precomputed from the converted message.
+    #[serde(default)]
+    pub chat_kind: String,
+    #[serde(default)]
+    pub forward: bool,
+    #[serde(default)]
+    pub reply: bool,
+    #[serde(default)]
+    pub mention: bool,
+    #[serde(default)]
+    pub via_bot: bool,
+    #[serde(default)]
+    pub media: Option<String>,
 }
-impl Watcher {
-    pub fn accepts(&self, event: &Event) -> bool {
-        self.event == event.kind
-            && self.outgoing.is_none_or(|v| v == event.outgoing)
-            && self.commands.is_none_or(|v| v == event.command)
-            && self.private.is_none_or(|v| v == (event.chat > 0))
-            && self
-                .contains
-                .as_ref()
-                .is_none_or(|v| event.text.contains(v))
-            && self
-                .startswith
-                .as_ref()
-                .is_none_or(|v| event.text.starts_with(v))
-            && self.sender.is_none_or(|v| event.sender == Some(v))
-            && self.chat.is_none_or(|v| v == event.chat)
+impl Event {
+    /// Fills the watcher-filter fields from a converted Bot API message.
+    pub fn enrich_from_botapi(&mut self, message: &crate::botapi::Message) {
+        self.chat_kind = message.chat.kind.clone();
+        self.forward = message.forward_origin.is_some();
+        self.reply = message.reply_to_message_id.is_some();
+        self.via_bot = message.via_bot.is_some();
+        self.mention = message
+            .entities
+            .iter()
+            .chain(message.caption_entities.iter())
+            .any(|entity| matches!(entity.kind.as_str(), "mention" | "text_mention"));
+        self.media = message.media_type.map(|kind| kind.name().to_owned());
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,6 +314,27 @@ impl Package {
             "module needs handlers (maximum 64 commands, 32 watchers, 16 loops)"
         );
         ensure!(self.source.len() <= MAX_SOURCE, "module too large");
+        for scope in &self.manifest.scope {
+            ensure!(
+                matches!(scope.as_str(), "ffmpeg" | "inline" | "shell"),
+                "unknown scope requirement: {scope}"
+            );
+        }
+        ensure!(
+            self.manifest.strings.len() <= 8
+                && serde_json::to_vec(&self.manifest.strings)?.len() <= 64 * 1024,
+            "module strings exceed limits"
+        );
+        if let Some(url) = &self.manifest.packurl {
+            let parsed = reqwest::Url::parse(url)?;
+            ensure!(
+                url.len() <= 512
+                    && parsed.scheme() == "https"
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none(),
+                "packurl must be a plain HTTPS URL"
+            );
+        }
         for (key, validator) in &self.manifest.validators {
             let value = self
                 .manifest
@@ -253,11 +404,28 @@ impl Package {
                     ),
                 "invalid watcher"
             );
+            for filter in [&watcher.contains, &watcher.startswith, &watcher.endswith] {
+                ensure!(
+                    filter.as_ref().is_none_or(|v| v.len() <= 512),
+                    "watcher text filter too long"
+                );
+            }
+            if let Some(pattern) = &watcher.regex {
+                ensure!(pattern.len() <= 512, "watcher regex too long");
+                regex::Regex::new(pattern)
+                    .map_err(|e| anyhow::anyhow!("invalid watcher regex: {e}"))?;
+            }
         }
         for task in &self.manifest.loops {
             ensure!(
                 valid_name(&task.function) && (1..=86400).contains(&task.interval_seconds),
                 "loop interval must be 1–86400 seconds"
+            );
+            ensure!(
+                task.stop_clause
+                    .as_ref()
+                    .is_none_or(|clause| valid_name(clause)),
+                "loop stop_clause must be a valid key name"
             );
         }
         engine()
@@ -266,7 +434,7 @@ impl Package {
         Ok(())
     }
     pub fn run(&self, command: &str, args: &str, config: serde_json::Value) -> Result<String> {
-        let effect = self.run_command(command, args, config, serde_json::Value::Null)?;
+        let effect = self.run_command(command, args, config, serde_json::Value::Null, "en")?;
         Ok(effect
             .text
             .or_else(|| effect.screen.map(|s| s.text))
@@ -295,6 +463,7 @@ impl Package {
         args: &str,
         config: serde_json::Value,
         state: serde_json::Value,
+        language: &str,
     ) -> Result<Effect> {
         let cmd = self
             .manifest
@@ -312,6 +481,11 @@ impl Package {
             "state",
             rhai::serde::to_dynamic(state).map_err(|e| anyhow::anyhow!(e.to_string()))?,
         );
+        scope.push(
+            "strings",
+            rhai::serde::to_dynamic(self.manifest.strings_for(language))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        );
         let result = e
             .call_fn::<Dynamic>(&mut scope, &ast, &cmd.function, (args.to_owned(), config))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -323,6 +497,7 @@ impl Package {
         event: serde_json::Value,
         config: serde_json::Value,
         state: serde_json::Value,
+        language: &str,
     ) -> Result<Effect> {
         let e = self.engine()?;
         let ast = e
@@ -332,6 +507,11 @@ impl Package {
         scope.push(
             "state",
             rhai::serde::to_dynamic(state).map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        );
+        scope.push(
+            "strings",
+            rhai::serde::to_dynamic(self.manifest.strings_for(language))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         );
         let event = rhai::serde::to_dynamic(event).map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let config = rhai::serde::to_dynamic(config).map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -380,6 +560,21 @@ fn effect(result: Dynamic) -> Result<Effect> {
             "module state exceeds 256 KiB"
         );
     }
+    ensure!(result.frames.len() <= 100, "too many animation frames");
+    if !result.frames.is_empty() {
+        ensure!(
+            result.frame_ms == 0 || (100..=10_000).contains(&result.frame_ms),
+            "frame_ms must be within 100–10000"
+        );
+        ensure!(
+            result.frames.iter().all(|f| f.chars().count() <= 4096),
+            "animation frame exceeds the message limit"
+        );
+        ensure!(
+            result.screen.is_none() && result.media.is_none() && result.album.is_empty(),
+            "frames cannot combine with a screen or media"
+        );
+    }
     Ok(result)
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -390,6 +585,12 @@ pub struct Effect {
     pub screen: Option<crate::forms::Screen>,
     pub media: Option<crate::media::Media>,
     pub album: Vec<crate::media::Media>,
+    /// Message animation: every frame is sent as an edit of the previous one.
+    #[serde(default)]
+    pub frames: Vec<String>,
+    /// Delay between frames, milliseconds. `0` means the default of 1000.
+    #[serde(default)]
+    pub frame_ms: u32,
 }
 impl Registry {
     pub fn load(root: &Path, owner: i64) -> Result<Self> {
@@ -548,6 +749,35 @@ pub async fn download(url: &str) -> Result<Package> {
     package.validate()?;
     Ok(package)
 }
+/// Downloads the language pack of `packurl` into `package.manifest.strings`.
+/// Fetched on install, so the module never reaches for the network at runtime.
+pub async fn resolve_packurl(package: &mut Package) -> Result<()> {
+    let Some(url) = package.manifest.packurl.clone() else {
+        return Ok(());
+    };
+    let parsed = reqwest::Url::parse(&url)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()?;
+    let mut response = client.get(parsed).send().await?.error_for_status()?;
+    ensure!(
+        response.url().scheme() == "https",
+        "redirect to insecure HTTP refused"
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        ensure!(
+            bytes.len() + chunk.len() <= 64 * 1024,
+            "language pack too large"
+        );
+        bytes.extend_from_slice(&chunk);
+    }
+    let pack: BTreeMap<String, BTreeMap<String, String>> =
+        serde_json::from_slice(&bytes).context("packurl must be JSON: {language: {key: text}}")?;
+    package.manifest.strings = pack;
+    package.validate()
+}
 pub fn evaluate(source: &str) -> Result<String> {
     ensure!(source.len() <= MAX_SOURCE, "script too large");
     engine()
@@ -638,5 +868,189 @@ mod tests {
         invalid.source = "this is not Rhai }".into();
         assert!(r.stage(invalid).is_err());
         assert!(r.command("hello").is_some());
+    }
+    fn event(json: serde_json::Value) -> Event {
+        serde_json::from_value(json).unwrap()
+    }
+    fn watcher(json: serde_json::Value) -> Watcher {
+        serde_json::from_value(json).unwrap()
+    }
+    fn outgoing_photo_in_group() -> Event {
+        event(serde_json::json!({
+            "text": "look", "chat": -1001234567890i64, "sender": 7, "outgoing": true,
+            "command": false, "edited": false, "id": 5, "kind": "message",
+            "chat_kind": "supergroup", "forward": false, "reply": false,
+            "mention": false, "via_bot": false, "media": "photo"
+        }))
+    }
+    #[test]
+    fn watcher_tag_matrix() {
+        let base = outgoing_photo_in_group();
+        for (filter, expected) in [
+            (r#"{"outgoing":true}"#, true),
+            (r#"{"outgoing":false}"#, false),
+            (r#"{"commands":false}"#, true),
+            (r#"{"commands":true}"#, false),
+            (r#"{"groups":true}"#, true),
+            (r#"{"groups":false}"#, false),
+            (r#"{"private":true}"#, false),
+            (r#"{"channels":true}"#, false),
+            (r#"{"photos":true}"#, true),
+            (r#"{"photos":false}"#, false),
+            (r#"{"videos":true}"#, false),
+            (r#"{"videos":false}"#, true),
+            (r#"{"media":true}"#, true),
+            (r#"{"media":false}"#, false),
+            (r#"{"contains":"oo"}"#, true),
+            (r#"{"contains":"zz"}"#, false),
+            (r#"{"startswith":"look"}"#, true),
+            (r#"{"endswith":"ok"}"#, true),
+            (r#"{"regex":"l[o]{2}k"}"#, true),
+            (r#"{"regex":"^nope"}"#, false),
+            (r#"{"sender":7}"#, true),
+            (r#"{"sender":8}"#, false),
+            (r#"{"chat":-1001234567890}"#, true),
+            // Bare channel ids match the -100 form, like the Python original
+            (r#"{"chat":1234567890}"#, true),
+            (r#"{"mention":true}"#, false),
+            (r#"{"reply":true}"#, false),
+            (r#"{"forwards":false}"#, true),
+            (r#"{"inline":false}"#, true),
+        ] {
+            let mut filter: serde_json::Value =
+                serde_json::from_str(filter).expect("valid filter JSON");
+            filter["event"] = "message".into();
+            filter["function"] = "w".into();
+            assert_eq!(
+                watcher(filter.clone()).accepts(&base),
+                expected,
+                "filter {filter} against an outgoing photo in a group"
+            );
+        }
+    }
+    #[test]
+    fn invalid_watcher_regex_is_rejected() {
+        let mut p = package();
+        p.manifest.watchers.push(watcher(
+            serde_json::json!({"function":"w","event":"message","regex":"("}),
+        ));
+        assert!(p.validate().is_err());
+    }
+    #[test]
+    fn stop_clause_must_be_a_valid_key() {
+        let mut p = package();
+        p.manifest.loops.push(Loop {
+            function: "tick".into(),
+            interval_seconds: 5,
+            autostart: true,
+            wait_before: false,
+            stop_clause: Some("not a key!".into()),
+        });
+        assert!(p.validate().is_err());
+    }
+    #[test]
+    fn unknown_scope_requirement_is_rejected() {
+        let mut p = package();
+        p.manifest.scope.push("root".into());
+        assert!(p.validate().is_err());
+    }
+    #[test]
+    fn strings_reach_the_script_per_language() {
+        let mut p = package();
+        p.manifest
+            .strings
+            .entry("en".into())
+            .or_default()
+            .insert("greeting".into(), "Hello".into());
+        p.manifest
+            .strings
+            .entry("ru".into())
+            .or_default()
+            .insert("greeting".into(), "Привет".into());
+        p.source = "fn hello(args, config) { strings.greeting }".into();
+        p.validate().unwrap();
+        assert_eq!(
+            p.run_command(
+                "hello",
+                "",
+                serde_json::json!({}),
+                serde_json::Value::Null,
+                "ru"
+            )
+            .unwrap()
+            .text
+            .unwrap(),
+            "Привет"
+        );
+        // Unknown languages fall back to English
+        assert_eq!(
+            p.run_command(
+                "hello",
+                "",
+                serde_json::json!({}),
+                serde_json::Value::Null,
+                "de"
+            )
+            .unwrap()
+            .text
+            .unwrap(),
+            "Hello"
+        );
+    }
+    #[test]
+    fn frames_are_validated_and_exclusive() {
+        let mut p = package();
+        p.source = "fn hello(args, config) { #{frames:[\"a\",\"b\"],frame_ms:50} }".into();
+        p.validate().unwrap();
+        assert!(
+            p.run_command(
+                "hello",
+                "",
+                serde_json::json!({}),
+                serde_json::Value::Null,
+                "en"
+            )
+            .is_err()
+        );
+        p.source = "fn hello(args, config) { #{frames:[\"a\"],screen:#{text:\"x\"}} }".into();
+        assert!(
+            p.run_command(
+                "hello",
+                "",
+                serde_json::json!({}),
+                serde_json::Value::Null,
+                "en"
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn tags_example_validates_and_animates() {
+        let p: Package =
+            serde_json::from_str(include_str!("../examples/tags.module.json")).unwrap();
+        p.validate().unwrap();
+        let effect = p
+            .run_command(
+                "pulse",
+                "",
+                p.manifest.config.clone(),
+                serde_json::Value::Null,
+                "en",
+            )
+            .unwrap();
+        assert_eq!(effect.frames.len(), 3);
+        assert_eq!(effect.frame_ms, 300);
+        assert!(effect.frames[0].contains("Photo saved"));
+        // The Russian pack takes over for the ru language
+        let ru = p
+            .run_command(
+                "pulse",
+                "",
+                p.manifest.config.clone(),
+                serde_json::Value::Null,
+                "ru",
+            )
+            .unwrap();
+        assert!(ru.frames[0].contains("Фото сохранено"));
     }
 }

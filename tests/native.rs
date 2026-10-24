@@ -232,7 +232,7 @@ async fn stateful_command_and_callback_round_trip() {
     f.install(include_str!("../examples/counter.module.json"));
     let (p, _) = f.ctx.modules.lock().unwrap().command("counter").unwrap();
     let first = p
-        .run_command("counter", "", p.manifest.config.clone(), json!(null))
+        .run_command("counter", "", p.manifest.config.clone(), json!(null), "en")
         .unwrap();
     assert_eq!(first.state.as_ref().unwrap()["count"], 0);
     let screen = first.screen.unwrap();
@@ -244,6 +244,7 @@ async fn stateful_command_and_callback_round_trip() {
             json!({"kind":"callback"}),
             p.manifest.config.clone(),
             first.state.unwrap(),
+            "en",
         )
         .unwrap();
     assert_eq!(next.state.unwrap()["count"], 1);
@@ -258,7 +259,13 @@ async fn module_can_return_direct_media_without_network() {
     p.source="fn hello(args, config) { #{text:\"Photo\",media:#{kind:\"photo\",source:#{\"type\":\"url\",url:\"https://example.com/photo.jpg\"}}} }".into();
     p.validate().unwrap();
     let effect = p
-        .run_command("hello", "", serde_json::json!({}), serde_json::Value::Null)
+        .run_command(
+            "hello",
+            "",
+            serde_json::json!({}),
+            serde_json::Value::Null,
+            "en",
+        )
         .unwrap();
     assert_eq!(
         effect.media.unwrap().kind,
@@ -448,6 +455,7 @@ async fn hidden_help_and_disabled_watchers_do_not_modify_state() {
         id: 1,
         kind: "message".into(),
         data: serde_json::Value::Null,
+        ..Default::default()
     };
     f.ctx.handle_event(event.clone()).await.unwrap();
     assert_eq!(f.ctx.db.get("hello", "state")["seen"], true);

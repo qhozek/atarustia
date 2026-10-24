@@ -26,6 +26,7 @@ grammers-mtsender = { version = "=0.11.0", features = ["proxy"] }
 hex = "0.4"
 rand = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rhai = { version = "1.23", features = ["sync", "serde"] }
 rpassword = "7"

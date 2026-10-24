@@ -1,0 +1,24 @@
+{
+  "manifest": {
+    "name": "tags",
+    "description": "Watcher tags, loop stop clause, strings and animation",
+    "commands": [
+      {"name":"pulse","description":"Animated frames","function":"pulse","permission":"owner"},
+      {"name":"stopticker","description":"Stop the loop via its stop clause","function":"stopticker","permission":"owner"}
+    ],
+    "watchers": [
+      {"function":"on_photo","event":"message","outgoing":true,"photos":true},
+      {"function":"on_question","event":"message","commands":false,"regex":"\\?$"},
+      {"function":"on_group_mention","event":"message","groups":true,"mention":true,"outgoing":false}
+    ],
+    "loops": [
+      {"function":"ticker","interval_seconds":86400,"autostart":true,"stop_clause":"ticker_alive"}
+    ],
+    "config": {"frames": 3},
+    "strings": {
+      "en": {"seen_photo": "Photo saved", "asked": "Question asked"},
+      "ru": {"seen_photo": "Фото сохранено", "asked": "Вопрос задан"}
+    }
+  },
+  "source": "fn pulse(args, config) { let s = strings.seen_photo; #{frames: [\"◐ \" + s, \"◓ \" + s, \"◑ \" + s], frame_ms: 300} } fn stopticker(args, config) { let s = if type_of(state) == \"map\" { state } else { #{} }; s.ticker_alive = false; #{state: s, text: \"ticker stopped\"} } fn on_photo(event, config) { let s = if type_of(state) == \"map\" { state } else { #{} }; s.photos = s.photos + 1; #{state: s, text: strings.seen_photo} } fn on_question(event, config) { #{text: strings.asked} } fn on_group_mention(event, config) { #{text: \"mentioned: \" + event.sender} } fn ticker(event, config) { #{text: \"tick \" + event.time} }"
+}
