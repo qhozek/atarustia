@@ -151,7 +151,7 @@ fn command(name: &str, description: &str) -> Command {
 }
 fn core_group(name: &str) -> &'static str {
     match name {
-        "info" | "atarustia" | "help" | "helphide" => crate::info::MODULE,
+        "info" | "ataraxia" | "help" | "helphide" => crate::info::MODULE,
         "update" | "restart" | "source" => crate::update_ui::MODULE,
         "config" | "fconfig" => "atarustiaConfig",
         "weburl" | "addacc" => "atarustiaWeb",
@@ -183,6 +183,8 @@ pub fn catalog(ctx: &Context) -> Catalog {
         .chain(crate::security_commands::COMMANDS)
     {
         let group = core_group(name);
+        let source = crate::original::module_key(group);
+        let english = ctx.db.language().starts_with("en");
         let m = core.entry(group).or_insert_with(|| Module {
             name: group.into(),
             description: match group {
@@ -211,7 +213,20 @@ pub fn catalog(ctx: &Context) -> Catalog {
                 ..Default::default()
             },
         });
-        m.commands.push(command(name, doc));
+        let description = crate::original::text(english, source, "_cls_doc");
+        if description != "_cls_doc" {
+            m.description = description;
+        }
+        let key = format!("_cmd_doc_{name}");
+        let description = crate::original::text(english, source, &key);
+        m.commands.push(command(
+            name,
+            if description == key {
+                doc
+            } else {
+                &description
+            },
+        ));
     }
     let mut catalog = Catalog {
         modules: core.into_values().collect(),

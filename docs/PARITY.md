@@ -1,6 +1,10 @@
 # Ограничения
 
 - Внешние Python-модули не выполняются. Доступны Rust SDK и пакеты JSON/Rhai.
+- Rhai поддерживает capability-checked HTTP/Telegram host calls с async I/O; произвольный raw RPC,
+  локальные файлы и большие media transfers доступны только доверенному native SDK.
+  Lifecycle hooks (install/ready/unload/config_change), suspension и общий Effect pipeline реализованы;
+  inline/guest не поддерживают album/frames как один результат и явно отклоняют их.
 - TL-схема закреплена зависимостями Cargo; динамического обновления слоя нет.
 - API-защита ограничивает команды, но не перехватывает каждый raw RPC.
 - Часть ответов ещё не переведена на оба языка, UI конфигурации не повторяет все исходные экраны.

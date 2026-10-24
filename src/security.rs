@@ -281,7 +281,7 @@ pub fn owner_only(cmd: &str) -> bool {
             | "api_fw_protection"
             | "suspend_api_protect"
             | "addacc"
-            | "ch_atarustia_bot"
+            | "ch_ataraxia_bot"
             | "ch_bot_token"
             | "clearlogs"
             | "setup"

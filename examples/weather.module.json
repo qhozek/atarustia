@@ -1,0 +1,12 @@
+{
+  "manifest": {
+    "name": "weather",
+    "description": "Current weather through the asynchronous HTTPS host API",
+    "commands": [
+      { "name": "weather", "description": "Current weather in Moscow", "function": "weather", "inline": true }
+    ],
+    "capabilities": { "http": ["https://wttr.in"] },
+    "config": { "url": "https://wttr.in/Moscow?format=3" }
+  },
+  "source": "fn weather(args, config) { let response = http_get(config.url); if !response.ok { throw \"Weather service returned HTTP \" + response.status; } #{text: response.body} }"
+}

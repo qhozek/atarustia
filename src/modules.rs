@@ -65,6 +65,30 @@ pub struct Manifest {
     /// HTTPS JSON pack ({language: {key: text}}) fetched into `strings` on install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packurl: Option<String>,
+    /// Explicit host capabilities, covered by the approved package hash.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::module_host::Capabilities::is_empty"
+    )]
+    pub capabilities: crate::module_host::Capabilities,
+    #[serde(default, skip_serializing_if = "Lifecycle::is_empty")]
+    pub lifecycle: Lifecycle,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Lifecycle {
+    pub install: Option<String>,
+    pub ready: Option<String>,
+    pub unload: Option<String>,
+    pub config_change: Option<String>,
+}
+impl Lifecycle {
+    pub fn is_empty(&self) -> bool {
+        self.install.is_none()
+            && self.ready.is_none()
+            && self.unload.is_none()
+            && self.config_change.is_none()
+    }
 }
 impl Manifest {
     /// Strings of `language` merged over the English fallback.
@@ -269,6 +293,7 @@ struct Pending {
 pub struct Registry {
     root: PathBuf,
     packages: BTreeMap<String, Package>,
+    load_errors: BTreeMap<String, String>,
 }
 impl Registry {
     pub fn pending(&self, hash: &str) -> Result<Package> {
@@ -296,7 +321,22 @@ pub fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 impl Package {
+    pub fn revision(&self) -> String {
+        digest(&serde_json::to_vec(self).expect("package is serializable"))
+    }
     pub fn validate(&self) -> Result<()> {
+        self.manifest.capabilities.validate()?;
+        for function in [
+            &self.manifest.lifecycle.install,
+            &self.manifest.lifecycle.ready,
+            &self.manifest.lifecycle.unload,
+            &self.manifest.lifecycle.config_change,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ensure!(valid_name(function), "invalid lifecycle function name");
+        }
         if let Some(metadata) = &self.manifest.help {
             metadata.validate()?;
         }
@@ -440,8 +480,11 @@ impl Package {
             .or_else(|| effect.screen.map(|s| s.text))
             .unwrap_or_default())
     }
-    fn engine(&self) -> Result<Engine> {
+    fn engine_with_host(&self, host: Option<crate::module_host::Bridge>) -> Result<Engine> {
         let mut e = engine();
+        if let Some(host) = host {
+            host.register(&mut e);
+        }
         if !self.manifest.libraries.is_empty() {
             let mut resolver = rhai::module_resolvers::StaticModuleResolver::new();
             for (name, source) in &self.manifest.libraries {
@@ -465,13 +508,25 @@ impl Package {
         state: serde_json::Value,
         language: &str,
     ) -> Result<Effect> {
+        self.run_command_with_host(command, args, config, state, language, None)
+    }
+    #[allow(clippy::too_many_arguments)] // Inputs mirror the existing synchronous module API plus its I/O bridge.
+    pub(crate) fn run_command_with_host(
+        &self,
+        command: &str,
+        args: &str,
+        config: serde_json::Value,
+        state: serde_json::Value,
+        language: &str,
+        host: Option<crate::module_host::Bridge>,
+    ) -> Result<Effect> {
         let cmd = self
             .manifest
             .commands
             .iter()
             .find(|c| c.name == command)
             .context("unknown module command")?;
-        let e = self.engine()?;
+        let e = self.engine_with_host(host)?;
         let ast = e
             .compile(&self.source)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -499,7 +554,19 @@ impl Package {
         state: serde_json::Value,
         language: &str,
     ) -> Result<Effect> {
-        let e = self.engine()?;
+        self.run_event_with_host(function, event, config, state, language, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_event_with_host(
+        &self,
+        function: &str,
+        event: serde_json::Value,
+        config: serde_json::Value,
+        state: serde_json::Value,
+        language: &str,
+        host: Option<crate::module_host::Bridge>,
+    ) -> Result<Effect> {
+        let e = self.engine_with_host(host)?;
         let ast = e
             .compile(&self.source)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -575,6 +642,12 @@ fn effect(result: Dynamic) -> Result<Effect> {
             "frames cannot combine with a screen or media"
         );
     }
+    if let Some(reason) = &result.suspend {
+        ensure!(
+            !reason.is_empty() && reason.len() <= 1024,
+            "suspend reason must contain 1–1024 bytes"
+        );
+    }
     Ok(result)
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -591,29 +664,56 @@ pub struct Effect {
     /// Delay between frames, milliseconds. `0` means the default of 1000.
     #[serde(default)]
     pub frame_ms: u32,
+    /// Stop all module handlers until the owner explicitly resumes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspend: Option<String>,
 }
 impl Registry {
+    pub fn package(&self, name: &str) -> Option<Package> {
+        self.packages.get(name).cloned()
+    }
     pub fn load(root: &Path, owner: i64) -> Result<Self> {
         let root = root.join("loaded_modules").join(owner.to_string());
         std::fs::create_dir_all(&root)?;
         let mut r = Self {
             root,
             packages: BTreeMap::new(),
+            load_errors: BTreeMap::new(),
         };
-        for file in std::fs::read_dir(&r.root)? {
-            let path = file?.path();
+        let mut files = std::fs::read_dir(&r.root)?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        files.sort();
+        for path in files {
             if path.extension().is_none_or(|e| e != "json") {
                 continue;
             }
-            let package: Package = serde_json::from_slice(&std::fs::read(&path)?)
-                .with_context(|| format!("invalid module {}", path.display()))?;
-            package.validate()?;
-            ensure!(
-                path.file_stem().and_then(|s| s.to_str()) == Some(package.manifest.name.as_str()),
-                "module filename mismatch"
-            );
-            r.ensure_unique(&package)?;
-            r.packages.insert(package.manifest.name.clone(), package);
+            let result = (|| -> Result<Package> {
+                let package: Package = serde_json::from_slice(&std::fs::read(&path)?)?;
+                package.validate()?;
+                ensure!(
+                    path.file_stem().and_then(|s| s.to_str())
+                        == Some(package.manifest.name.as_str()),
+                    "module filename mismatch"
+                );
+                r.ensure_unique(&package)?;
+                Ok(package)
+            })();
+            match result {
+                Ok(package) => {
+                    r.packages.insert(package.manifest.name.clone(), package);
+                }
+                Err(_) => {
+                    // Preserve malformed source; never echo it or prevent healthy modules loading.
+                    let name = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("invalid")
+                        .to_owned();
+                    r.load_errors
+                        .insert(name, "invalid installed package; source preserved".into());
+                }
+            }
         }
         Ok(r)
     }
@@ -635,6 +735,9 @@ impl Registry {
     }
     pub fn list(&self) -> Vec<Manifest> {
         self.packages.values().map(|p| p.manifest.clone()).collect()
+    }
+    pub fn load_errors(&self) -> BTreeMap<String, String> {
+        self.load_errors.clone()
     }
     pub fn command(&self, name: &str) -> Option<(Package, Command)> {
         self.packages.values().find_map(|p| {
@@ -678,6 +781,7 @@ impl Registry {
             &self.root.join(format!("{name}.json")),
             &serde_json::to_vec_pretty(&pending.package)?,
         )?;
+        self.load_errors.remove(&name);
         self.packages.insert(name, pending.package);
         std::fs::remove_file(path)?;
         Ok(())

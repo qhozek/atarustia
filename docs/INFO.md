@@ -4,7 +4,7 @@
 Prefix/Uptime; CPU/RAM/Kernel/Host. Ссылки ведут на владельца и коммит atarustia в GitHub.
 В английском и русском режиме используются исходные английские подписи, статус обновлений переведён.
 
-Настройки: `.config atarustiaInfo`. Также доступны `.fconfig atarustiaInfo <key> <JSON>` и reset в меню.
+Настройки: `.config ataraxiaInfo`. Также доступны `.fconfig ataraxiaInfo <key> <JSON>` и reset в меню.
 
 | Ключ | По умолчанию | Назначение |
 |---|---|---|

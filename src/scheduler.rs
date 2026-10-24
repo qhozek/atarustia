@@ -17,13 +17,16 @@ impl Scheduler {
         let mut active = std::collections::HashSet::new();
         let mut result = Vec::new();
         for p in packages {
+            if db
+                .get("RustModuleLifecycle", &p.manifest.name)
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| s != "active")
+            {
+                continue;
+            }
             for task in &p.manifest.loops {
-                let key = format!(
-                    "{}:{}:{}",
-                    p.manifest.name,
-                    crate::modules::digest(p.source.as_bytes()),
-                    task.function
-                );
+                let key = format!("{}:{}:{}", p.manifest.name, p.revision(), task.function);
                 active.insert(key.clone());
                 let enabled = db
                     .get(&p.manifest.name, "loops")

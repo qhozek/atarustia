@@ -20,11 +20,9 @@ use tokio_util::sync::CancellationToken;
 pub const BUILTINS: &[(&str, &str)] = &[
     ("logs", "отправить буфер логов в Избранное"),
     ("clearlogs", "очистить буфер логов"),
-    ("tglogs", "on|off — отправка WARN/ERROR в тему Logs"),
-    ("loops", "[module function on|off] — фоновые задачи"),
     ("dllangpack", "<https-url> — JSON/YAML языковой пакет"),
     (
-        "ch_atarustia_bot",
+        "ch_ataraxia_bot",
         "[username] — создать/выбрать inline-бота",
     ),
     ("ch_bot_token", "<token> — заменить токен и перезапустить"),
@@ -37,10 +35,6 @@ pub const BUILTINS: &[(&str, &str)] = &[
         "[-f|full_commit_hash] — обновление исходников с подтверждением",
     ),
     (
-        "setup",
-        "создать/восстановить контент-форум Assets / Backups / Logs",
-    ),
-    (
         "restoremods",
         "в ответ на backup JSON — подготовить модули к одобрению",
     ),
@@ -51,7 +45,7 @@ pub const BUILTINS: &[(&str, &str)] = &[
         "[module|command] [-f|-c|-l] — каталог и карточки модулей",
     ),
     ("info", "информация о сборке"),
-    ("atarustia", "информация о платформе"),
+    ("ataraxia", "информация о платформе"),
     ("ping", "проверить отклик"),
     ("setprefix", "<prefix> — сменить префикс"),
     ("setlang", "ru|en — язык"),
@@ -60,15 +54,8 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ("delalias", "<alias> — удалить алиас"),
     ("config", "[module] — конфигурация"),
     ("fconfig", "<module> <key> <json> — изменить параметр"),
-    ("modules", "список модулей"),
     ("dlm", "<https-url> — скачать пакет для проверки"),
     ("lm", "в ответ на JSON-пакет — подготовить модуль"),
-    ("approve", "<sha256> — одобрить подготовленный модуль"),
-    ("review", "<sha256> — исходники подготовленной ревизии"),
-    (
-        "importbackup",
-        "в ответ на Python backup — проверить и сохранить для ручного переноса",
-    ),
     ("ulm", "<module> — удалить модуль"),
     ("ml", "<module> — отправить исходники"),
     (
@@ -353,118 +340,17 @@ impl Context {
         {
             return Ok(());
         }
-        let result = if let Some((native, _)) = native {
-            match native
-                .command(&self.services(), &message, &name, &args)
-                .await
-            {
-                Ok(crate::sdk::Response::Text(text)) => Ok(Some(text)),
-                Ok(crate::sdk::Response::None) => Ok(None),
-                Err(e) => Err(e),
-                Ok(crate::sdk::Response::Screen(screen)) => {
-                    let screen = *screen;
-                    let fallback = screen.text.clone();
-                    if let Some(bot) = self.bot.read().await.clone() {
-                        match bot.form(self, &message, screen).await {
-                            Ok(()) => Ok(None),
-                            Err(_) => Ok(Some(fallback)),
-                        }
-                    } else {
-                        Ok(Some(fallback))
-                    }
-                }
-            }
-        } else if let Some((package, _)) = module {
-            let _serial = self.events.lock().await;
-            let module_name = package.manifest.name.clone();
-            let config = self.db.get(&package.manifest.name, "__config__");
-            let config = if config.is_null() {
-                package.manifest.config.clone()
-            } else {
-                config
-            };
-            let state = self.db.get(&module_name, "state");
-            let language = self.db.language();
-            match tokio::task::spawn_blocking(move || {
-                package.run_command(&name, &args, config, state, &language)
-            })
-            .await?
-            {
-                Err(e) => Err(e),
-                Ok(effect) => {
-                    if let Some(state) = effect.state {
-                        self.db.set(&module_name, "state", state)?;
-                    }
-                    if !effect.frames.is_empty() {
-                        let delay =
-                            std::time::Duration::from_millis(u64::from(if effect.frame_ms == 0 {
-                                1000
-                            } else {
-                                effect.frame_ms
-                            }));
-                        let peer = telegram::peer(&message).await?;
-                        let clean = |frame: &str| {
-                            self.logs
-                                .redact(crate::output::censor(frame.to_owned(), &self.secrets))
-                        };
-                        let animated = self
-                            .client
-                            .send_message(
-                                peer,
-                                grammers_client::message::InputMessage::new()
-                                    .text(clean(&effect.frames[0]))
-                                    .reply_to(Some(message.id())),
-                            )
-                            .await?;
-                        for frame in effect.frames.iter().skip(1) {
-                            tokio::select! {
-                                _=self.stop.cancelled()=>break,
-                                _=tokio::time::sleep(delay)=>{}
-                            }
-                            if animated
-                                .edit(
-                                    grammers_client::message::InputMessage::new()
-                                        .text(clean(frame)),
-                                )
-                                .await
-                                .is_err()
-                            {
-                                tracing::debug!("animation edit failed");
-                                break;
-                            }
-                        }
-                        return Ok(());
-                    }
-                    if let Some(media) = &effect.media {
-                        let caption = self.logs.redact(effect.text.clone().unwrap_or_default());
-                        let peer = telegram::peer(&message).await?;
-                        let input = grammers_client::message::InputMessage::new()
-                            .text(caption)
-                            .reply_to(Some(message.id()))
-                            .media(media.prepare(&self.client).await?);
-                        self.client.send_message(peer, input).await?;
-                        return Ok(());
-                    }
-                    if !effect.album.is_empty() {
-                        let peer = telegram::peer(&message).await?;
-                        let mut items = vec![];
-                        for (i, media) in effect.album.iter().enumerate() {
-                            items.push(
-                                grammers_client::media::InputMedia::new()
-                                    .caption(if i == 0 {
-                                        self.logs.redact(effect.text.clone().unwrap_or_default())
-                                    } else {
-                                        String::new()
-                                    })
-                                    .reply_to(Some(message.id()))
-                                    .media(media.prepare(&self.client).await?),
-                            );
-                        }
-                        self.client.send_album(peer, items).await?;
-                        return Ok(());
-                    }
-                    if let Some(screen) = effect.screen {
-                        screen.restrict_module(&module_name)?;
+        let result =
+            if let Some((native, _)) = native {
+                match native
+                    .command(&self.services(), &message, &name, &args)
+                    .await
+                {
+                    Ok(crate::sdk::Response::Text(text)) => Ok(Some(text)),
+                    Ok(crate::sdk::Response::None) => Ok(None),
+                    Err(e) => Err(e),
+                    Ok(crate::sdk::Response::Screen(screen)) => {
+                        let screen = *screen;
                         let fallback = screen.text.clone();
                         if let Some(bot) = self.bot.read().await.clone() {
                             match bot.form(self, &message, screen).await {
@@ -474,14 +360,46 @@ impl Context {
                         } else {
                             Ok(Some(fallback))
                         }
-                    } else {
-                        Ok(effect.text)
                     }
                 }
-            }
-        } else {
-            self.execute(&message, &name, &args).await
-        };
+            } else if let Some((package, _)) = module {
+                let _serial = self.events.lock().await;
+                let module_name = package.manifest.name.clone();
+                ensure!(
+                    crate::module_lifecycle::active(self, &module_name),
+                    "module is suspended"
+                );
+                ensure!(
+                    self.modules
+                        .lock()
+                        .unwrap()
+                        .package(&module_name)
+                        .is_some_and(|p| p.revision() == package.revision()),
+                    "module revision changed"
+                );
+                match crate::module_host::run_command(
+                    self,
+                    package,
+                    name,
+                    args,
+                    crate::module_host::Mode {
+                        chat: Some(chat),
+                        message_id: Some(message.id()),
+                        preview: false,
+                    },
+                )
+                .await
+                {
+                    Err(e) => Err(e),
+                    Ok(effect) => {
+                        let output = crate::module_effects::Plan::new(&module_name, effect)?
+                            .commit(self, &module_name, false)?;
+                        crate::module_effects::message(self, &module_name, output, &message).await
+                    }
+                }
+            } else {
+                self.execute(&message, &name, &args).await
+            };
         match result {
             Ok(Some(text)) => {
                 let text = if let Some(grep) = &grep {
@@ -543,7 +461,10 @@ impl Context {
             crate::update_flow::command(self, m, name, args).await?;
             return Ok(None);
         }
-        if matches!(name, "info" | "atarustia") {
+        if name == "ataraxia" {
+            return crate::original::about(self, m).await;
+        }
+        if name == "info" {
             crate::info::send(self, m).await?;
             return Ok(None);
         }
@@ -692,7 +613,7 @@ impl Context {
                 self.stop.cancel();
                 return Ok(None);
             }
-            "ch_atarustia_bot" => {
+            "ch_ataraxia_bot" => {
                 ensure!(
                     m.peer_id().bot_api_dialog_id_unchecked() == self.owner,
                     "bot setup only in Saved Messages"
@@ -877,6 +798,7 @@ impl Context {
                 let value: Value =
                     serde_json::from_str(parts.next().context("JSON value missing")?)?;
                 crate::screens::set_config(self, module, key, value)?;
+                crate::module_lifecycle::config_changes(self).await;
                 self.tr("config_saved", &[])
             }
             "modules" => {
@@ -891,12 +813,9 @@ impl Context {
                 let mut p = crate::modules::download(args).await?;
                 crate::modules::resolve_packurl(&mut p).await?;
                 self.check_scope(&p.manifest.scope).await?;
-                let manifest = serde_json::to_string_pretty(&p.manifest)?;
                 let hash = self.modules.lock().unwrap().stage(p)?;
-                format!(
-                    "Пакет подготовлен, но НЕ установлен. Проверь исходники и права.\n{manifest}\n\nОдобрить точный пакет:\n{}approve {hash}",
-                    self.db.prefix()
-                )
+                crate::module_lifecycle::approve(self, &hash).await?;
+                self.tr("module_installed", &[])
             }
             "lm" => {
                 let bytes = self.reply_bytes(m, 512 * 1024).await?;
@@ -905,10 +824,8 @@ impl Context {
                 crate::modules::resolve_packurl(&mut p).await?;
                 self.check_scope(&p.manifest.scope).await?;
                 let hash = self.modules.lock().unwrap().stage(p)?;
-                format!(
-                    "Проверь пакет. Для установки: {}approve {hash}",
-                    self.db.prefix()
-                )
+                crate::module_lifecycle::approve(self, &hash).await?;
+                self.tr("module_installed", &[])
             }
             "approve" => {
                 let pending = self.modules.lock().unwrap().pending(args)?;
@@ -921,24 +838,16 @@ impl Context {
                     "package command conflicts with a native Rust module"
                 );
                 self.check_scope(&pending.manifest.scope).await?;
-                self.modules.lock().unwrap().approve(args)?;
-                // Installed revisions may have changed the implementation behind existing buttons.
-                self.forms.lock().unwrap().clear();
+                crate::module_lifecycle::approve(self, args).await?;
                 self.tr("module_installed", &[])
             }
             "ulm" => {
-                self.modules.lock().unwrap().remove(args)?;
-                self.forms.lock().unwrap().invalidate_module(args);
+                crate::module_lifecycle::remove(self, args).await?;
                 self.tr("module_removed", &[])
             }
             "clearmodules" => {
                 ensure!(args == "confirm", "usage: clearmodules confirm");
-                let mut r = self.modules.lock().unwrap();
-                let names = r.list();
-                for m in names {
-                    self.forms.lock().unwrap().invalidate_module(&m.name);
-                }
-                r.clear()?;
+                crate::module_lifecycle::clear(self).await?;
                 "Внешние модули удалены".into()
             }
             "ml" => {
@@ -1142,10 +1051,26 @@ impl Context {
                     m.peer_id().bot_api_dialog_id_unchecked() == self.owner,
                     "weburl is only allowed in Saved Messages"
                 );
-                self.web
+                let web = self
+                    .web
                     .as_ref()
-                    .context("web disabled; restart without --no-web")?
-                    .link()
+                    .context("web disabled; restart without --no-web")?;
+                let link = web.link();
+                let url = link.split("/#").next().unwrap_or(&link);
+                let text = crate::original::text(
+                    self.db.language().starts_with("en"),
+                    "ataraxia_web",
+                    "web_link",
+                )
+                .replace("{link}", &crate::output::escape(&link))
+                .replace("{url}", &crate::output::escape(url));
+                let input = grammers_client::message::InputMessage::new().html(text);
+                if m.outgoing() {
+                    m.edit(input).await?;
+                } else {
+                    m.reply(input).await?;
+                }
+                return Ok(None);
             }
             _ => bail!("unknown command"),
         };
@@ -1188,6 +1113,9 @@ impl Context {
         let _serial = self.events.lock().await;
         let packages = self.modules.lock().unwrap().export();
         for package in packages {
+            if !crate::module_lifecycle::active(self, &package.manifest.name) {
+                continue;
+            }
             let policy = crate::preferences::watcher_policy(&self.db, &package.manifest.name);
             if !policy.accepts(event.chat, event.outgoing) {
                 continue;
@@ -1199,60 +1127,51 @@ impl Context {
                 .into_iter()
                 .filter(|w| w.accepts(&event))
             {
-                let config = self.db.get(&package.manifest.name, "__config__");
-                let config = if config.is_null() {
-                    package.manifest.config.clone()
-                } else {
-                    config
-                };
-                let state = self.db.get(&package.manifest.name, "state");
-                let p = package.clone();
-                let data = serde_json::to_value(&event)?;
-                let language = self.db.language();
-                let effect = tokio::task::spawn_blocking(move || {
-                    p.run_event(&watcher.function, data, config, state, &language)
-                })
-                .await??;
-                if let Some(state) = effect.state {
-                    self.db.set(&package.manifest.name, "state", state)?;
+                if !crate::module_lifecycle::active(self, &package.manifest.name) {
+                    break;
                 }
-                if let Some(text) = effect.text.filter(|t| !t.is_empty()) {
-                    let user = event.sender.unwrap_or(0);
-                    if !self.rate.lock().unwrap().accept(user, event.chat) {
-                        continue;
+                let result = async {
+                    let p = package.clone();
+                    let data = serde_json::to_value(&event)?;
+                    let effect = crate::module_host::run_event(
+                        self,
+                        p,
+                        watcher.function,
+                        data,
+                        crate::module_host::Mode {
+                            chat: Some(event.chat),
+                            message_id: (event.id > 0).then_some(event.id),
+                            preview: false,
+                        },
+                    )
+                    .await?;
+                    let output = crate::module_effects::Plan::new(&package.manifest.name, effect)?
+                        .commit(self, &package.manifest.name, false)?;
+                    if !matches!(output, crate::module_effects::Output::None) {
+                        let user = event.sender.unwrap_or(0);
+                        if !self.rate.lock().unwrap().accept(user, event.chat) {
+                            return Ok::<_, anyhow::Error>(());
+                        }
+                        crate::module_effects::background(
+                            self,
+                            &package.manifest.name,
+                            output,
+                            event.kind != "message" && event.kind != "raw",
+                            event.chat,
+                            (event.id > 0).then_some(event.id),
+                        )
+                        .await?;
                     }
-                    let id = grammers_session::types::PeerId::from_bot_api_dialog_id(event.chat)
-                        .context("invalid watcher chat")?;
-                    let sender = if event.kind == "bot_message" {
-                        self.bot
-                            .read()
-                            .await
-                            .as_ref()
-                            .map(|b| b.bot.client.clone())
-                            .unwrap_or_else(|| self.client.clone())
-                    } else {
-                        self.client.clone()
-                    };
-                    let peer = sender
-                        .resolve_peer(id.to_ambient_ref())
-                        .await?
-                        .to_ref()
-                        .await
-                        .map_err(anyhow::Error::from_boxed)?
-                        .context("watcher peer missing")?;
-                    for page in crate::output::pages(&crate::output::censor(text, &self.secrets))
-                        .into_iter()
-                        .take(3)
-                    {
-                        sender
-                            .send_message(
-                                peer,
-                                grammers_client::message::InputMessage::new()
-                                    .text(page)
-                                    .reply_to((event.id > 0).then_some(event.id)),
-                            )
-                            .await?;
-                    }
+                    Ok(())
+                }
+                .await;
+                if let Err(error) = result {
+                    crate::module_lifecycle::report(
+                        self,
+                        &package.manifest.name,
+                        "watcher",
+                        &error,
+                    );
                 }
             }
         }
@@ -1273,6 +1192,9 @@ impl Context {
             return Ok(());
         }
         let _serial = self.events.lock().await;
+        if !crate::module_lifecycle::active(self, &package.manifest.name) {
+            return Ok(());
+        }
         // A module removed while the timer was waiting must not run one final time.
         if !self
             .modules
@@ -1280,7 +1202,7 @@ impl Context {
             .unwrap()
             .export()
             .iter()
-            .any(|p| p.manifest.name == package.manifest.name && p.source == package.source)
+            .any(|p| p.manifest.name == package.manifest.name && p.revision() == package.revision())
         {
             return Ok(());
         }
@@ -1302,41 +1224,17 @@ impl Context {
         {
             return Ok(());
         }
-        let config = self.db.get(&package.manifest.name, "__config__");
-        let config = if config.is_null() {
-            package.manifest.config.clone()
-        } else {
-            config
-        };
-        let state = self.db.get(&package.manifest.name, "state");
         let name = package.manifest.name.clone();
-        let language = self.db.language();
-        let effect = tokio::task::spawn_blocking(move || {
-            package.run_event(
-                &task.function,
-                json!({"kind":"loop","time":security::now()}),
-                config,
-                state,
-                &language,
-            )
-        })
-        .await??;
-        if let Some(state) = effect.state {
-            self.db.set(&name, "state", state)?;
-        }
-        if let Some(text) = effect.text.filter(|t| !t.is_empty()) {
-            for page in crate::output::pages(&crate::output::censor(text, &self.secrets))
-                .into_iter()
-                .take(3)
-            {
-                self.client
-                    .send_message(
-                        grammers_session::types::PeerId::self_user().to_ambient_ref(),
-                        page,
-                    )
-                    .await?;
-            }
-        }
+        let effect = crate::module_host::run_event(
+            self,
+            package,
+            task.function,
+            json!({"kind":"loop","time":security::now()}),
+            crate::module_host::Mode::default(),
+        )
+        .await?;
+        let output = crate::module_effects::Plan::new(&name, effect)?.commit(self, &name, false)?;
+        crate::module_effects::background(self, &name, output, false, self.owner, None).await?;
         Ok(())
     }
     async fn reply_bytes(&self, m: &Message, limit: usize) -> Result<Vec<u8>> {

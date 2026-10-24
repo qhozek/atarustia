@@ -1,0 +1,13 @@
+{
+  "manifest": {
+    "name": "telegram_host",
+    "description": "Read the current chat's recent history and save a summary",
+    "commands": [
+      { "name": "save_summary", "description": "Copy a short summary of the current chat to Saved Messages", "function": "summary" }
+    ],
+    "capabilities": {
+      "telegram": { "operations": ["history", "send_message"], "chats": ["current", "me"] }
+    }
+  },
+  "source": "fn summary(args, config) { let messages = host_call(\"telegram.history\", #{limit: 5}); let text = \"Recent messages:\\n\"; for message in messages { text += message.text + \"\\n\"; } host_call(\"telegram.send_message\", #{chat: \"me\", text: text}); #{text: \"Summary saved\"} }"
+}

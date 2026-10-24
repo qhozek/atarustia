@@ -140,6 +140,8 @@ struct Unit {
     rich_render: Option<String>,
     rich_failed: bool,
     help_return: Option<crate::help::State>,
+    module: Option<String>,
+    inline_command: Option<String>,
 }
 #[derive(Clone)]
 pub struct Gate {
@@ -384,6 +386,8 @@ impl Forms {
                 rich_render: None,
                 rich_failed: false,
                 help_return: None,
+                module: None,
+                inline_command: None,
             },
         );
         let message = match self.render(&id, 0) {
@@ -401,6 +405,20 @@ impl Forms {
     }
     pub fn gate(&self, id: &str) -> Option<Gate> {
         self.units.get(id).and_then(|u| u.gate.clone())
+    }
+    pub fn bind_module(&mut self, id: &str, module: &str) -> Result<()> {
+        self.units.get_mut(id).context("form expired")?.module = Some(module.into());
+        Ok(())
+    }
+    pub fn bind_inline_command(&mut self, id: &str, command: &str) -> Result<()> {
+        self.units
+            .get_mut(id)
+            .context("form expired")?
+            .inline_command = Some(command.into());
+        Ok(())
+    }
+    pub fn inline_command(&self, id: &str) -> Option<String> {
+        self.units.get(id).and_then(|u| u.inline_command.clone())
     }
     pub fn help_return(&self, id: &str) -> Option<crate::help::State> {
         self.units.get(id).and_then(|u| u.help_return.clone())
@@ -514,7 +532,8 @@ impl Forms {
             .units
             .iter()
             .filter(|(_, u)| {
-                u.gate.as_ref().and_then(|g| g.module.as_deref()) == Some(module)
+                u.module.as_deref() == Some(module)
+                    || u.gate.as_ref().and_then(|g| g.module.as_deref()) == Some(module)
                     || u.screen.buttons.iter().flatten().chain(u.screen.rich_buttons.iter()).any(
                         |key| matches!(&key.action,Some(Action::Module{module:m,..}) if m==module),
                     )

@@ -244,6 +244,41 @@ async fn run_inner(
     connection.close().await
 }
 async fn handle(context: &Context, update: Update) -> Result<()> {
+    if let Update::CallbackQuery(query) = &update
+        && let Some(token) = std::str::from_utf8(query.data())
+            .ok()
+            .and_then(|data| data.strip_prefix("authorize_web_"))
+    {
+        let owner = security::owners(&context.db, context.owner)
+            .contains(&query.sender_id().bare_id_unchecked());
+        if owner && let Some(web) = &context.web {
+            web.confirm(token);
+            query.answer().send().await?;
+        } else {
+            query.answer().alert("403").send().await?;
+        }
+        return Ok(());
+    }
+    // Form delivery waits for its inline query while the originating module owns
+    // the events lock. Route this internal query before any module watcher.
+    if let Update::InlineQuery(query) = &update
+        && let Some(unit) = query.text().strip_prefix("unit:")
+    {
+        let owners = security::owners(&context.db, context.owner);
+        let results = if owners.contains(&query.sender_id().bare_id_unchecked()) {
+            context
+                .forms
+                .lock()
+                .unwrap()
+                .inline_result(unit)
+                .map(|r| vec![r])
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+        query.answer(results).private().cache_time(0).send().await?;
+        return Ok(());
+    }
     for module in context.native.list() {
         if let Err(e) = module.update(&context.services(), &update).await {
             tracing::warn!(module=module.name(),error=%e,"native bot event failed");
@@ -312,6 +347,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             .await?;
                     }
                 }
+                crate::module_lifecycle::config_changes(context).await;
                 if let Ok(screen) =
                     crate::screens::config_for_unit(context, &prompt.module, &prompt.unit)
                 {
@@ -400,20 +436,31 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 use crate::forms::Action;
                 if !owners.contains(&q.sender_id().bare_id_unchecked()) {
                     let gate = context.forms.lock().unwrap().gate(&click.unit);
+                    let inline_command = context.forms.lock().unwrap().inline_command(&click.unit);
                     anyhow::ensure!(
                         gate.is_some()
-                            || matches!(
-                                &click.action,
-                                crate::forms::Action::HelpNavigate { .. }
-                                    | crate::forms::Action::Help { .. }
-                                    | crate::forms::Action::Close
-                                    | crate::forms::Action::Page { .. }
-                            ) && crate::security_commands::inline_allowed(
-                                &context.db,
-                                context.owner,
-                                q.sender_id().bare_id_unchecked(),
-                                "help"
-                            ),
+                            || inline_command.as_ref().is_some_and(|command| {
+                                crate::security_commands::inline_allowed(
+                                    &context.db,
+                                    context.owner,
+                                    q.sender_id().bare_id_unchecked(),
+                                    command,
+                                )
+                            })
+                            || inline_command.is_none()
+                                && matches!(
+                                    &click.action,
+                                    crate::forms::Action::HelpNavigate { .. }
+                                        | crate::forms::Action::Help { .. }
+                                        | crate::forms::Action::Close
+                                        | crate::forms::Action::Page { .. }
+                                )
+                                && crate::security_commands::inline_allowed(
+                                    &context.db,
+                                    context.owner,
+                                    q.sender_id().bare_id_unchecked(),
+                                    "help"
+                                ),
                         "delegated form has no originating permission gate"
                     );
                     if let Some(gate) = gate {
@@ -491,6 +538,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             "owner only configuration"
                         );
                         crate::screens::set_config(context, &module, &key, value)?;
+                        crate::module_lifecycle::config_changes(context).await;
                         let screen =
                             crate::screens::config_for_unit(context, &module, &click.unit)?;
                         context.forms.lock().unwrap().replace(&click.unit, screen)?
@@ -541,6 +589,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             _ => (None, false),
                         };
                         crate::screens::apply_config(context, &module, &key, step, reset)?;
+                        crate::module_lifecycle::config_changes(context).await;
                         let s = crate::screens::config_for_unit(context, &module, &click.unit)?;
                         context.forms.lock().unwrap().replace(&click.unit, s)?
                     }
@@ -551,6 +600,29 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     } => {
                         // Delegated command forms cease to work when that user's rule is revoked.
                         let _lock = context.events.lock().await;
+                        context
+                            .forms
+                            .lock()
+                            .unwrap()
+                            .click(data, q.sender_id().bare_id_unchecked())?;
+                        if !owners.contains(&q.sender_id().bare_id_unchecked()) {
+                            let command = context.forms.lock().unwrap().inline_command(&click.unit);
+                            if let Some(command) = command {
+                                anyhow::ensure!(
+                                    crate::security_commands::inline_allowed(
+                                        &context.db,
+                                        context.owner,
+                                        q.sender_id().bare_id_unchecked(),
+                                        &command
+                                    ),
+                                    "inline command access revoked"
+                                );
+                            }
+                        }
+                        anyhow::ensure!(
+                            crate::module_lifecycle::active(context, &module),
+                            "module is suspended"
+                        );
                         let p = context
                             .modules
                             .lock()
@@ -559,28 +631,36 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             .into_iter()
                             .find(|p| p.manifest.name == module)
                             .context("module unloaded")?;
-                        let saved = context.db.get(&module, "__config__");
-                        let config = if saved.is_null() {
-                            p.manifest.config.clone()
-                        } else {
-                            saved
-                        };
-                        let state = context.db.get(&module, "state");
                         let event = serde_json::json!({"kind":"callback","user":q.sender_id().bare_id_unchecked(),"args":args});
-                        let language = context.db.language();
-                        let effect = tokio::task::spawn_blocking(move || {
-                            p.run_event(&function, event, config, state, &language)
-                        })
-                        .await??;
-                        if let Some(s) = effect.state {
-                            context.db.set(&module, "state", s)?;
-                        }
-                        let screen = effect.screen.unwrap_or_else(|| crate::forms::Screen {
-                            text: effect.text.unwrap_or_default(),
-                            ..Default::default()
-                        });
-                        screen.restrict_module(&module)?;
-                        context.forms.lock().unwrap().replace(&click.unit, screen)?
+                        let chat = context
+                            .forms
+                            .lock()
+                            .unwrap()
+                            .gate(&click.unit)
+                            .map(|gate| gate.message.peer_id().bot_api_dialog_id_unchecked());
+                        let effect = crate::module_host::run_event(
+                            context,
+                            p,
+                            function,
+                            event,
+                            crate::module_host::Mode {
+                                chat,
+                                message_id: None,
+                                preview: false,
+                            },
+                        )
+                        .await?;
+                        let plan = crate::module_effects::Plan::new(&module, effect)?;
+                        plan.require_callback_destination(chat.is_some())?;
+                        let output = plan.commit(context, &module, false)?;
+                        return crate::module_effects::callback(
+                            context,
+                            &module,
+                            output,
+                            &q,
+                            &click.unit,
+                        )
+                        .await;
                     }
                 };
                 if let Some(bot) = context.bot.read().await.as_ref() {
@@ -626,21 +706,6 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
             }
         }
         Update::InlineQuery(q) => {
-            if let Some(id) = q.text().strip_prefix("unit:") {
-                if !owners.contains(&q.sender_id().bare_id_unchecked()) {
-                    q.answer(Vec::<Article>::new()).send().await?;
-                    return Ok(());
-                }
-                let result = context
-                    .forms
-                    .lock()
-                    .unwrap()
-                    .inline_result(id)
-                    .map(|r| vec![r])
-                    .unwrap_or_default();
-                q.answer(result).private().cache_time(0).send().await?;
-                return Ok(());
-            }
             let cmd = q.text().split_whitespace().next().unwrap_or("help");
             if !crate::security_commands::inline_allowed(
                 &context.db,
@@ -658,6 +723,20 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 .command(cmd)
                 .filter(|(_, c)| c.inline);
             if let Some((package, _)) = command {
+                let _serial = context.events.lock().await;
+                anyhow::ensure!(
+                    crate::module_lifecycle::active(context, &package.manifest.name),
+                    "module is suspended"
+                );
+                anyhow::ensure!(
+                    context
+                        .modules
+                        .lock()
+                        .unwrap()
+                        .package(&package.manifest.name)
+                        .is_some_and(|p| p.revision() == package.revision()),
+                    "module revision changed"
+                );
                 let args = q
                     .text()
                     .split_once(char::is_whitespace)
@@ -666,60 +745,29 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     .to_owned();
                 let name = cmd.to_owned();
                 let module = package.manifest.name.clone();
-                let saved = context.db.get(&module, "__config__");
-                let config = if saved.is_null() {
-                    package.manifest.config.clone()
-                } else {
-                    saved
-                };
-                let state = context.db.get(&module, "state");
-                let language = context.db.language();
-                let effect = tokio::task::spawn_blocking(move || {
-                    package.run_command(&name, &args, config, state, &language)
-                })
-                .await??;
-                // Inline previews must never mutate module state: typing a query is not execution consent.
-                if let Some(media) = effect.media.as_ref() {
-                    let caption = context.logs.redact(effect.text.clone().unwrap_or_default());
-                    let result = crate::media::inline_result(
-                        &module,
-                        &module,
-                        InputMessage::new().text(caption),
-                        Some(media),
-                        None,
-                    )?;
-                    q.answer([result]).private().cache_time(0).send().await?;
-                    return Ok(());
-                }
-                if let Some(screen) = effect
-                    .screen
-                    .as_ref()
-                    .filter(|s| s.media.is_some() || !s.gallery.is_empty())
-                {
-                    let media = screen.media.as_ref().or_else(|| screen.gallery.first());
-                    let result = crate::media::inline_result(
-                        &module,
-                        &module,
-                        if screen.html {
-                            InputMessage::new().html(&screen.text)
-                        } else {
-                            InputMessage::new().text(context.logs.redact(screen.text.clone()))
-                        },
-                        media,
-                        None,
-                    )?;
-                    q.answer([result]).private().cache_time(0).send().await?;
-                    return Ok(());
-                }
-                let text = effect
-                    .text
-                    .or_else(|| effect.screen.map(|s| s.text))
-                    .unwrap_or_default();
-                q.answer([Article::new(module, context.logs.redact(text))])
-                    .private()
-                    .cache_time(0)
-                    .send()
-                    .await?;
+                let effect = crate::module_host::run_command(
+                    context,
+                    package,
+                    name,
+                    args,
+                    crate::module_host::Mode {
+                        chat: None,
+                        message_id: None,
+                        preview: true,
+                    },
+                )
+                .await?;
+                let plan = crate::module_effects::Plan::new(&module, effect)?;
+                plan.require_single_result()?;
+                let output = plan.commit(context, &module, true)?;
+                let result = crate::module_effects::inline(
+                    context,
+                    &module,
+                    cmd,
+                    output,
+                    q.sender_id().bare_id_unchecked(),
+                )?;
+                q.answer([result]).private().cache_time(0).send().await?;
                 return Ok(());
             }
             let body = if q.text().trim() == "ping" {
@@ -761,18 +809,67 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     .filter(|(_, c)| c.guest);
                 if let Some((package, _)) = package {
                     let module = package.manifest.name.clone();
-                    let saved = context.db.get(&module, "__config__");
-                    let config = if saved.is_null() {
-                        package.manifest.config.clone()
-                    } else {
-                        saved
-                    };
                     let name = name.to_owned();
                     let args = args.to_owned();
-                    let result =
-                        tokio::task::spawn_blocking(move || package.run(&name, &args, config))
-                            .await??;
-                    q.answer(Article::new("atarustia", result)).await?;
+                    let _serial = context.events.lock().await;
+                    anyhow::ensure!(
+                        crate::module_lifecycle::active(context, &module),
+                        "module is suspended"
+                    );
+                    anyhow::ensure!(
+                        context
+                            .modules
+                            .lock()
+                            .unwrap()
+                            .package(&module)
+                            .is_some_and(|p| p.revision() == package.revision()),
+                        "module revision changed"
+                    );
+                    let effect = crate::module_host::run_command(
+                        context,
+                        package,
+                        name,
+                        args,
+                        crate::module_host::Mode {
+                            chat: Some(q.message.peer_id().bot_api_dialog_id_unchecked()),
+                            message_id: Some(q.message.id()),
+                            preview: false,
+                        },
+                    )
+                    .await?;
+                    let plan = crate::module_effects::Plan::new(&module, effect)?;
+                    plan.require_single_result()?;
+                    let output = plan.commit(context, &module, false)?;
+                    let user = q
+                        .message
+                        .sender_id()
+                        .map(|id| id.bare_id_unchecked())
+                        .unwrap_or(context.owner);
+                    let result = crate::module_effects::inline(
+                        context,
+                        &module,
+                        text.split_whitespace().next().unwrap_or(""),
+                        output,
+                        user,
+                    )?;
+                    let bot = context
+                        .bot
+                        .read()
+                        .await
+                        .clone()
+                        .context("inline bot disconnected")?;
+                    let grammers_client::tl::enums::Update::BotGuestChatQuery(raw) = &q.raw else {
+                        anyhow::bail!("not a guest query")
+                    };
+                    bot.bot
+                        .client
+                        .invoke(
+                            &grammers_client::tl::functions::messages::SetBotGuestChatResult {
+                                query_id: raw.query_id,
+                                result,
+                            },
+                        )
+                        .await?;
                 }
             }
         }

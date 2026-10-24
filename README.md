@@ -96,17 +96,28 @@ PowerShell: `$env:ATARUSTIA_API_ID='12345'`, `$env:ATARUSTIA_API_HASH='...'`.
 
 ## Команды
 
-- `.help`, `.info`, `.atarustia`, `.ping`, `.source`
+- `.help`, `.info`, `.ataraxia`, `.ping`, `.source`
 - `.settings`, `.config`, `.fconfig`, `.setprefix`, `.setlang`, `.aliases`
-- `.modules`, `.dlm`, `.lm`, `.review`, `.approve`, `.ulm`, `.ml`
+- `.dlm`, `.lm`, `.ulm`, `.ml`, `.clearmodules`
 - `.security`, `.ownerlist`, `.owneradd`, `.ownerrm`, `.tsec`, `.sgroups`
-- `.watchers`, `.loops`, `.nonickcmd`, `.nonickuser`, `.nonickchat`
+- `.watchers`, `.watcher`, `.watcherbl`, `.nonickcmd`, `.nonickuser`, `.nonickchat`
 - `.e` — Rhai; `.terminal`, `.ec`, `.ecpp`, `.enode` требуют `--allow-shell`
-- `.backupall`, `.backupdb`, `.backupmods`, `.restoredb`, `.importbackup`
-- `.setup`, `.logs`, `.clearlogs`, `.tglogs`, `.restart`, `.update`, `.addacc`, `.weburl`
+- `.backupall`, `.backupdb`, `.backupmods`, `.restoredb`, `.restoremods`, `.restoreall`
+- `.logs`, `.clearlogs`, `.restart`, `.update`, `.addacc`, `.weburl`, `.ch_ataraxia_bot`
 
-Полная справка доступна в Telegram. Загруженный пакет не выполняется до `.approve <sha256>`.
+Полная справка доступна в Telegram. `.lm`/`.dlm` устанавливают переданный модуль, как в оригинале.
 Формат модулей и Rust SDK — [docs/MODULES.md](docs/MODULES.md). Python-файлы не исполняются.
+
+Устанавливаемые Rhai-пакеты могут обращаться к HTTPS API, читать сообщения и историю,
+отправлять/редактировать сообщения и работать с небольшими файлами через асинхронный host API.
+Операции, чаты и HTTPS origins явно перечисляются в `manifest.capabilities` и входят в hash
+одобряемой ревизии. Без разрешений I/O недоступен; inline-предпросмотр не может изменять Telegram.
+Примеры — `examples/weather.module.json` и `examples/telegram_host.module.json`.
+
+Пакеты поддерживают hooks `install`, `ready`, `unload`, `config_change` и самоприостановку.
+Watchers/loops доставляют не только текст, но и экраны, медиа, альбомы и анимации через общий
+обработчик `Effect`. Ошибка watcher не блокирует следующие обработчики. Пример —
+`examples/lifecycle.module.json`; ограничения inline/guest описаны в документации модулей.
 
 `.help` открывает каталог встроенных и внешних модулей. Внешние идут по 15 на страницу,
 встроенные остаются на каждой странице. Нажатие на модуль открывает команды, copy-кнопки,
@@ -116,13 +127,14 @@ inline/guest handlers и настройки. `.help <команда или ал�
 
 ### Карточка `.info`
 
-`.info` и `.atarustia` показывают владельца, версию, ветку/коммит, обновления, префикс, аптайм,
-CPU/RAM, ядро и ОС. Баннер и оформление настраиваются в `.config atarustiaInfo`.
+`.info` показывает владельца, версию, ветку/коммит, обновления, префикс, аптайм,
+CPU/RAM, ядро и ОС. `.ataraxia` — отдельная карточка версии, как в оригинале.
+Баннер и оформление настраиваются в `.config ataraxiaInfo`.
 
 ```text
-.fconfig atarustiaInfo rich_mode true
-.fconfig atarustiaInfo banner_url "https://example.com/banner.png"
-.fconfig atarustiaInfo custom_message "<b>{me}</b> · {uptime} · {ram_usage}"
+.fconfig ataraxiaInfo rich_mode true
+.fconfig ataraxiaInfo banner_url "https://example.com/banner.png"
+.fconfig ataraxiaInfo custom_message "<b>{me}</b> · {uptime} · {ram_usage}"
 ```
 
 Пустой `banner_url` выключает картинку; `custom_message: null` возвращает стандартный текст.

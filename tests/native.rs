@@ -70,8 +70,8 @@ async fn help_catalogue_and_permissions_are_recomputed_after_revocation() {
     .await
     .unwrap();
     assert!(!revoked.text.contains(".counter"));
-    assert!(atarustia::help::toggle_hidden(&f.ctx, "atarustiaInfo").unwrap());
-    assert!(atarustia::preferences::hidden(&f.ctx.db, "atarustiaInfo"));
+    assert!(atarustia::help::toggle_hidden(&f.ctx, "ataraxiaInfo").unwrap());
+    assert!(atarustia::preferences::hidden(&f.ctx.db, "ataraxiaInfo"));
     let (unit, _) = f
         .ctx
         .forms
@@ -138,7 +138,7 @@ async fn core_info_settings_share_ui_validation_and_persistence() {
     );
     let help = atarustia::screens::help(&f.ctx, None).unwrap();
     help.validate().unwrap();
-    assert!(help.rich_html.unwrap().contains("assets/atarustia.png"));
+    assert!(help.rich_html.unwrap().contains("assets/ataraxia.png"));
     atarustia::screens::set_config(&f.ctx, module, "help_banner_url", json!("")).unwrap();
     assert!(
         !atarustia::screens::help(&f.ctx, None)
@@ -225,6 +225,529 @@ impl Fixture {
         let h = r.stage(p).unwrap();
         r.approve(&h).unwrap();
     }
+}
+fn lifecycle_package() -> Package {
+    let mut package: Package =
+        serde_json::from_str(include_str!("../examples/hello.module.json")).unwrap();
+    package.manifest.lifecycle = atarustia::modules::Lifecycle {
+        install: Some("install".into()),
+        ready: Some("ready".into()),
+        unload: Some("unload".into()),
+        config_change: Some("changed".into()),
+    };
+    package.source = r#"
+        fn events(saved) { if saved == () { [] } else { saved.events } }
+        fn install(event, config) { let log = events(state); log.push("install"); #{state:#{events:log}} }
+        fn ready(event, config) { let log = events(state); log.push("ready"); #{state:#{events:log}} }
+        fn unload(event, config) { let log = events(state); log.push("unload:" + event.data.reason); #{state:#{events:log}} }
+        fn changed(event, config) { let log = events(state); log.push("config:" + config.greeting); #{state:#{events:log,old:event.data.old,current:event.data["new"]}} }
+        fn hello(args, config) { #{text:"ok"} }
+    "#.into();
+    package
+}
+#[tokio::test]
+async fn package_lifecycle_install_ready_restart_replace_and_remove() {
+    let f = Fixture::new();
+    let package = lifecycle_package();
+    let hash = f
+        .ctx
+        .modules
+        .lock()
+        .unwrap()
+        .stage(package.clone())
+        .unwrap();
+    assert!(f.ctx.db.get("hello", "state").is_null());
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.ctx.db.get("hello", "state")["events"],
+        json!(["install", "ready"])
+    );
+    atarustia::module_lifecycle::startup(&f.ctx).await;
+    assert_eq!(
+        f.ctx.db.get("hello", "state")["events"],
+        json!(["install", "ready", "ready"])
+    );
+    let mut next = package;
+    next.source.push_str("\n// next revision");
+    let hash = f.ctx.modules.lock().unwrap().stage(next).unwrap();
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.ctx.db.get("hello", "state")["events"],
+        json!([
+            "install",
+            "ready",
+            "ready",
+            "unload:replace",
+            "install",
+            "ready"
+        ])
+    );
+    atarustia::module_lifecycle::remove(&f.ctx, "hello")
+        .await
+        .unwrap();
+    assert!(f.ctx.modules.lock().unwrap().command("hello").is_none());
+    assert_eq!(
+        f.ctx.db.get("hello", "state")["events"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "unload:remove"
+    );
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn pause_resume_and_self_suspend_cover_watchers_and_loops() {
+    let f = Fixture::new();
+    let mut package = lifecycle_package();
+    package.manifest.watchers.push(atarustia::modules::Watcher {
+        function: "watch".into(),
+        ..Default::default()
+    });
+    package.manifest.loops.push(atarustia::modules::Loop {
+        function: "tick".into(),
+        autostart: true,
+        interval_seconds: 1,
+        wait_before: false,
+        stop_clause: None,
+    });
+    package.source.push_str(r#"fn watch(e,c) { #{state:#{events:events(state),seen:true},suspend:"waiting for configuration"} } fn tick(e,c) { #{state:#{events:events(state),loop_ran:true}} }"#);
+    let hash = f
+        .ctx
+        .modules
+        .lock()
+        .unwrap()
+        .stage(package.clone())
+        .unwrap();
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    atarustia::module_lifecycle::suspend(&f.ctx, "hello")
+        .await
+        .unwrap();
+    assert!(!atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    let event = atarustia::modules::Event {
+        kind: "message".into(),
+        chat: 1,
+        ..Default::default()
+    };
+    f.ctx.handle_event(event.clone()).await.unwrap();
+    f.ctx
+        .run_loop(package.clone(), package.manifest.loops[0].clone())
+        .await
+        .unwrap();
+    assert!(f.ctx.db.get("hello", "state").get("seen").is_none());
+    assert!(f.ctx.db.get("hello", "state").get("loop_ran").is_none());
+    let mut scheduler = atarustia::scheduler::Scheduler::default();
+    assert!(scheduler.due(&[package.clone()], &f.ctx.db).is_empty());
+    atarustia::module_lifecycle::resume(&f.ctx, "hello")
+        .await
+        .unwrap();
+    assert_eq!(scheduler.due(&[package], &f.ctx.db).len(), 1);
+    f.ctx.handle_event(event).await.unwrap();
+    assert_eq!(f.ctx.db.get("hello", "state")["seen"], true);
+    assert!(!atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    assert!(
+        atarustia::module_lifecycle::status(&f.ctx)
+            .to_string()
+            .contains("waiting for configuration")
+    );
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn broken_ready_hook_suspends_only_its_package() {
+    let f = Fixture::new();
+    let mut bad = lifecycle_package();
+    bad.source = "fn ready(e,c) { throw \"broken\"; } fn hello(a,c) { \"hi\" }".into();
+    bad.manifest.lifecycle.install = None;
+    let hash = f.ctx.modules.lock().unwrap().stage(bad).unwrap();
+    assert!(
+        atarustia::module_lifecycle::approve(&f.ctx, &hash)
+            .await
+            .is_err()
+    );
+    assert!(f.ctx.modules.lock().unwrap().package("hello").is_some());
+    assert!(!atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    assert_eq!(f.ctx.db.get("RustModuleErrors", "hello")["phase"], "ready");
+    assert!(f.ctx.modules.lock().unwrap().pending(&hash).is_err());
+    atarustia::module_lifecycle::remove(&f.ctx, "hello")
+        .await
+        .unwrap();
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn config_changes_are_coalesced_validated_and_dispatched_once() {
+    let f = Fixture::new();
+    let hash = f
+        .ctx
+        .modules
+        .lock()
+        .unwrap()
+        .stage(lifecycle_package())
+        .unwrap();
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    atarustia::screens::set_config(&f.ctx, "hello", "greeting", json!("one")).unwrap();
+    atarustia::screens::set_config(&f.ctx, "hello", "greeting", json!("two")).unwrap();
+    assert!(atarustia::screens::set_config(&f.ctx, "hello", "missing", json!("bad")).is_err());
+    atarustia::module_lifecycle::config_changes(&f.ctx).await;
+    let state = f.ctx.db.get("hello", "state");
+    assert_eq!(state["old"]["greeting"], "Hello");
+    assert_eq!(state["current"]["greeting"], "two");
+    assert_eq!(state["events"], json!(["install", "ready", "config:two"]));
+    atarustia::module_lifecycle::config_changes(&f.ctx).await;
+    assert_eq!(f.ctx.db.get("hello", "state"), state);
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn unload_runs_on_shutdown_even_after_account_cancellation() {
+    let f = Fixture::new();
+    let hash = f
+        .ctx
+        .modules
+        .lock()
+        .unwrap()
+        .stage(lifecycle_package())
+        .unwrap();
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    f.ctx.stop.cancel();
+    atarustia::module_lifecycle::shutdown(&f.ctx).await;
+    assert_eq!(
+        f.ctx.db.get("hello", "state")["events"],
+        json!(["install", "ready", "unload:shutdown"])
+    );
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn watcher_errors_do_not_skip_other_handlers_or_modules() {
+    let f = Fixture::new();
+    let mut first: Package =
+        serde_json::from_str(include_str!("../examples/hello.module.json")).unwrap();
+    first.source="fn hello(a,c){\"ok\"} fn broken(e,c) {throw \"bad watcher\";} fn good(e,c){#{state:#{seen:true}}}".into();
+    first.manifest.watchers = vec![
+        atarustia::modules::Watcher {
+            function: "broken".into(),
+            ..Default::default()
+        },
+        atarustia::modules::Watcher {
+            function: "good".into(),
+            ..Default::default()
+        },
+    ];
+    f.install(&serde_json::to_string(&first).unwrap());
+    let mut second = first.clone();
+    second.manifest.name = "second".into();
+    second.manifest.commands.clear();
+    f.install(&serde_json::to_string(&second).unwrap());
+    f.ctx
+        .handle_event(atarustia::modules::Event {
+            kind: "message".into(),
+            chat: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(f.ctx.db.get("hello", "state")["seen"], true);
+    assert_eq!(f.ctx.db.get("second", "state")["seen"], true);
+    assert_eq!(
+        f.ctx.db.get("RustModuleErrors", "hello")["phase"],
+        "watcher"
+    );
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn preview_never_commits_state_or_self_suspension() {
+    let f = Fixture::new();
+    let plan = atarustia::module_effects::Plan::new(
+        "hello",
+        atarustia::modules::Effect {
+            state: Some(json!({"must_not_persist":true})),
+            suspend: Some("preview".into()),
+            text: Some("preview".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        plan.commit(&f.ctx, "hello", true).unwrap(),
+        atarustia::module_effects::Output::Text(_)
+    ));
+    assert!(f.ctx.db.get("hello", "state").is_null());
+    assert!(atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn suspended_module_invalidates_bound_forms_even_without_callbacks() {
+    let f = Fixture::new();
+    f.install(include_str!("../examples/hello.module.json"));
+    let (unit, _) = f
+        .ctx
+        .forms
+        .lock()
+        .unwrap()
+        .create(
+            atarustia::forms::Screen {
+                text: "pages".into(),
+                pages: vec!["a".into(), "b".into()],
+                ..Default::default()
+            },
+            1,
+            vec![],
+        )
+        .unwrap();
+    f.ctx
+        .forms
+        .lock()
+        .unwrap()
+        .bind_module(&unit, "hello")
+        .unwrap();
+    atarustia::module_lifecycle::suspend(&f.ctx, "hello")
+        .await
+        .unwrap();
+    assert!(f.ctx.forms.lock().unwrap().render(&unit, 0).is_err());
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn stale_queued_loop_cannot_run_after_manifest_only_update() {
+    let f = Fixture::new();
+    let mut p: Package =
+        serde_json::from_str(include_str!("../examples/hello.module.json")).unwrap();
+    p.manifest.loops.push(atarustia::modules::Loop {
+        function: "tick".into(),
+        autostart: true,
+        interval_seconds: 1,
+        wait_before: false,
+        stop_clause: None,
+    });
+    p.source
+        .push_str(" fn tick(e,c) { #{state:#{stale:true}} }");
+    f.install(&serde_json::to_string(&p).unwrap());
+    let mut next = p.clone();
+    next.manifest.config = json!({"greeting":"new"});
+    let hash = f.ctx.modules.lock().unwrap().stage(next).unwrap();
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    f.ctx
+        .run_loop(p.clone(), p.manifest.loops[0].clone())
+        .await
+        .unwrap();
+    assert!(f.ctx.db.get("hello", "state").is_null());
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn startup_gate_and_persisted_owner_pause_survive_database_reopen() {
+    let f = Fixture::new();
+    f.install(include_str!("../examples/hello.module.json"));
+    atarustia::module_lifecycle::prepare_startup(&f.ctx).unwrap();
+    assert!(!atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    atarustia::module_lifecycle::startup(&f.ctx).await;
+    assert!(atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    atarustia::module_lifecycle::suspend(&f.ctx, "hello")
+        .await
+        .unwrap();
+    atarustia::module_lifecycle::prepare_startup(&f.ctx).unwrap();
+    atarustia::module_lifecycle::startup(&f.ctx).await;
+    assert!(!atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    assert_eq!(
+        Database::open(f.dir.path(), 1)
+            .unwrap()
+            .get("RustModuleLifecycle", "hello")["status"],
+        "suspended"
+    );
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn inline_results_preserve_screen_buttons_rich_media_and_invalidation() {
+    let f = Fixture::new();
+    let mut p: Package =
+        serde_json::from_str(include_str!("../examples/lifecycle.module.json")).unwrap();
+    p.validate().unwrap();
+    p.manifest.name = "hello".into();
+    let key = atarustia::forms::Key {
+        text: "refresh".into(),
+        url: None,
+        action: Some(atarustia::forms::Action::Module {
+            module: "hello".into(),
+            function: "refresh".into(),
+            args: json!({}),
+        }),
+    };
+    let screen = atarustia::forms::Screen {
+        text: "fallback".into(),
+        rich_html: Some("<b>Rich</b> {{atarustia:tap:0}}".into()),
+        rich_buttons: vec![key],
+        ..Default::default()
+    };
+    let output = atarustia::module_effects::Plan::new(
+        "hello",
+        atarustia::modules::Effect {
+            screen: Some(screen),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .commit(&f.ctx, "hello", true)
+    .unwrap();
+    let result = atarustia::module_effects::inline(&f.ctx, "hello", "hello", output, 1).unwrap();
+    let grammers_client::tl::enums::InputBotInlineResult::Result(result) = result else {
+        panic!("not an article")
+    };
+    let grammers_client::tl::enums::InputBotInlineMessage::RichMessage(message) =
+        result.send_message
+    else {
+        panic!("rich source lost")
+    };
+    let grammers_client::tl::enums::InputRichMessage::Html(html) = message.rich_message else {
+        panic!("rich HTML lost")
+    };
+    assert!(html.html.contains("Rich"));
+    assert!(html.html.contains("f:"));
+    f.ctx.forms.lock().unwrap().invalidate_module("hello");
+    // The manifest/library validation path must still never execute lifecycle code.
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn lifecycle_example_runs_install_ready_config_suspend_and_resume() {
+    let f = Fixture::new();
+    let p: Package =
+        serde_json::from_str(include_str!("../examples/lifecycle.module.json")).unwrap();
+    let hash = f.ctx.modules.lock().unwrap().stage(p).unwrap();
+    atarustia::module_lifecycle::approve(&f.ctx, &hash)
+        .await
+        .unwrap();
+    assert_eq!(f.ctx.db.get("lifecycle_demo", "state")["starts"], 1);
+    atarustia::screens::set_config(&f.ctx, "lifecycle_demo", "label", json!("changed")).unwrap();
+    atarustia::module_lifecycle::config_changes(&f.ctx).await;
+    assert_eq!(f.ctx.db.get("lifecycle_demo", "state")["label"], "changed");
+    atarustia::module_lifecycle::suspend(&f.ctx, "lifecycle_demo")
+        .await
+        .unwrap();
+    atarustia::module_lifecycle::resume(&f.ctx, "lifecycle_demo")
+        .await
+        .unwrap();
+    assert_eq!(f.ctx.db.get("lifecycle_demo", "state")["starts"], 2);
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn ready_error_at_startup_does_not_abort_other_packages() {
+    let f = Fixture::new();
+    let mut broken = lifecycle_package();
+    broken.manifest.lifecycle.install = None;
+    broken.source = "fn hello(a,c){\"ok\"} fn ready(e,c){throw \"ready failed\";}".into();
+    f.install(&serde_json::to_string(&broken).unwrap());
+    let mut good = lifecycle_package();
+    good.manifest.name = "healthy".into();
+    good.manifest.commands[0].name = "healthy".into();
+    good.manifest.commands[0].function = "hello".into();
+    f.install(&serde_json::to_string(&good).unwrap());
+    atarustia::module_lifecycle::prepare_startup(&f.ctx).unwrap();
+    atarustia::module_lifecycle::startup(&f.ctx).await;
+    assert!(!atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    assert!(atarustia::module_lifecycle::active(&f.ctx, "healthy"));
+    assert_eq!(f.ctx.db.get("healthy", "state")["events"], json!(["ready"]));
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn unload_error_never_prevents_removal_or_leaves_callbacks() {
+    let f = Fixture::new();
+    let mut broken = lifecycle_package();
+    broken.source = "fn hello(a,c){\"ok\"} fn unload(e,c){throw \"unload failed\";}".into();
+    f.install(&serde_json::to_string(&broken).unwrap());
+    atarustia::module_lifecycle::remove(&f.ctx, "hello")
+        .await
+        .unwrap();
+    assert!(f.ctx.modules.lock().unwrap().package("hello").is_none());
+    assert_eq!(f.ctx.db.get("RustModuleErrors", "hello")["phase"], "unload");
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn failed_config_hook_keeps_valid_config_and_other_hooks_continue() {
+    let f = Fixture::new();
+    let mut broken = lifecycle_package();
+    broken.source = "fn hello(a,c){\"ok\"} fn changed(e,c){throw \"config failed\";}".into();
+    f.install(&serde_json::to_string(&broken).unwrap());
+    atarustia::screens::set_config(&f.ctx, "hello", "greeting", json!("saved")).unwrap();
+    atarustia::module_lifecycle::config_changes(&f.ctx).await;
+    assert_eq!(f.ctx.db.get("hello", "__config__")["greeting"], "saved");
+    assert_eq!(
+        f.ctx.db.get("RustModuleErrors", "hello")["phase"],
+        "config_change"
+    );
+    assert!(f.ctx.db.get("RustModuleConfigChanges", "hello").is_null());
+    assert!(atarustia::module_lifecycle::active(&f.ctx, "hello"));
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn invalid_watcher_effect_never_commits_state_and_next_handler_still_runs() {
+    let f = Fixture::new();
+    let mut package: Package =
+        serde_json::from_str(include_str!("../examples/hello.module.json")).unwrap();
+    package.manifest.watchers = vec![
+        atarustia::modules::Watcher {
+            function: "invalid".into(),
+            ..Default::default()
+        },
+        atarustia::modules::Watcher {
+            function: "after".into(),
+            ..Default::default()
+        },
+    ];
+    package.source=r#"fn hello(a,c){"hi"} fn invalid(e,c){#{state:#{bad:true},screen:#{text:"bad",buttons:[[#{text:"bad",action:#{"type":"config_open","module":"Updater"}}]]}}} fn after(e,c){#{state:#{previous:state,good:true}}}"#.into();
+    f.install(&serde_json::to_string(&package).unwrap());
+    f.ctx
+        .handle_event(atarustia::modules::Event {
+            kind: "message".into(),
+            chat: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(f.ctx.db.get("hello", "state")["previous"].is_null());
+    assert_eq!(f.ctx.db.get("hello", "state")["good"], true);
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn installed_event_handlers_receive_host_context_without_implicit_io() {
+    let f = Fixture::new();
+    let mut p: Package =
+        serde_json::from_str(include_str!("../examples/hello.module.json")).unwrap();
+    p.manifest.watchers.push(atarustia::modules::Watcher {
+        function: "watch".into(),
+        ..Default::default()
+    });
+    p.source.push_str(
+        r#"
+        fn watch(event, config) {
+            let invocation_context = invocation();
+            let denied = false;
+            try { http_get("https://not-granted.example/"); } catch(error) { denied = true; }
+            #{state: #{chat:invocation_context.chat, message:invocation_context.message_id, denied:denied}}
+        }
+    "#,
+    );
+    f.install(&serde_json::to_string(&p).unwrap());
+    f.ctx
+        .handle_event(atarustia::modules::Event {
+            chat: -123,
+            id: 7,
+            kind: "message".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        f.ctx.db.get("hello", "state"),
+        json!({"chat":-123,"message":7,"denied":true})
+    );
+    f.connection.close().await.unwrap();
 }
 #[tokio::test]
 async fn stateful_command_and_callback_round_trip() {

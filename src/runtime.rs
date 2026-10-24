@@ -165,6 +165,17 @@ pub async fn run_with_modules(
     } else {
         None
     };
+    if let Some(web) = &web {
+        web.set_app_configured();
+    }
+    if let Some(web) = &web {
+        web.configure_runtime(
+            root.clone(),
+            key.clone(),
+            credentials.clone(),
+            options.proxy.clone(),
+        );
+    }
     let signal = stop.clone();
     tokio::spawn(async move {
         #[cfg(unix)]
@@ -223,6 +234,7 @@ pub async fn run_with_modules(
                     connection.close().await?;
                     break;
                 }
+                web.finish_login(&login).await;
                 *web.login.write().await = None;
             } else {
                 tokio::select! {_=stop.cancelled()=>{connection.close().await?;break;},r=auth::terminal_login(&connection.client,&credentials,options.phone.as_deref(),Some(connection.session.clone()),connection.updates.as_mut())=>{r?;}}
@@ -280,7 +292,7 @@ pub async fn run_with_modules(
                     token = Some(t);
                 }
                 _ => tracing::warn!(
-                    "inline bot setup failed; use .ch_atarustia_bot in Saved Messages to retry"
+                    "inline bot setup failed; use .ch_ataraxia_bot in Saved Messages to retry"
                 ),
             }
         }
@@ -320,7 +332,11 @@ pub async fn run_with_modules(
             native: native.clone(),
             semaphore: Arc::new(tokio::sync::Semaphore::new(32)),
         });
+        if let Some(web) = &web {
+            web.add_context(&context);
+        }
         tracing::info!(owner,account=%name,"account ready; send .help to Saved Messages");
+        crate::module_lifecycle::prepare_startup(&context)?;
         context.native.ready(&context.services()).await?;
         if let Err(error) = crate::update_flow::complete_for(&context, false).await {
             tracing::warn!(error=%error,"restart report deferred");
@@ -437,12 +453,14 @@ async fn account_loop(mut connection: Connection, context: Arc<Context>) -> Resu
     let mut tasks = tokio::task::JoinSet::new();
     let mut loop_tick = tokio::time::interval(Duration::from_secs(1));
     let mut scheduler = crate::scheduler::Scheduler::default();
+    crate::module_lifecycle::startup(&context).await;
+    let run_result = async {
     loop {
         tokio::select! {
             _=context.stop.cancelled()=>break,
             _=logs_tick.tick()=>{if context.db.get("RustLogs","telegram").as_bool().unwrap_or(false){let bytes=context.logs.snapshot();let text=context.logs.redact(String::from_utf8_lossy(&bytes).to_string());let errors=text.lines().filter(|l|l.contains("ERROR")||l.contains("WARN")).collect::<Vec<_>>().join("\n");let hash=crate::modules::digest(errors.as_bytes());if !errors.is_empty()&&hash!=log_hash{log_hash=hash;let ctx=context.clone();tasks.spawn(async move{if let Ok(Some((peer,topic)))=crate::content::topic_destination(&ctx.client,&ctx.db,"Logs").await{let tail:String=errors.chars().rev().take(3000).collect::<String>().chars().rev().collect();let _=ctx.client.send_message(peer,grammers_client::message::InputMessage::new().text(tail).reply_to(Some(topic))).await;}});}}},
-            _=module_updates.tick()=>{let packages=context.modules.lock().unwrap().export();let ctx=context.clone();tasks.spawn(async move{for (name,url,package) in Registry::updates(packages).await{let hash=match ctx.modules.lock().unwrap().stage(package){Ok(hash)=>hash,Err(_)=>continue};let notified=ctx.db.get("RustModuleUpdates",&name);if notified.as_str()==Some(&hash){continue;}let text=format!("Module update: {name}\n{url}\nReview the new source. Install exact revision with:\n{}approve {hash}",ctx.db.prefix());if ctx.client.send_message(grammers_session::types::PeerId::self_user().to_ambient_ref(),text).await.is_ok(){let _=ctx.db.set("RustModuleUpdates",&name,hash);}}});},
-            _=loop_tick.tick()=>{let packages=context.modules.lock().unwrap().export();for (package,task) in scheduler.due(&packages,&context.db){if let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let ctx=context.clone();tasks.spawn(async move{let _permit=permit;if let Err(e)=ctx.run_loop(package,task).await{tracing::warn!(error=%e,"module loop failed");}});}}},
+            _=module_updates.tick()=>{let packages=context.modules.lock().unwrap().export();let ctx=context.clone();tasks.spawn(async move{for (name,url,package) in Registry::updates(packages).await{let hash=match ctx.modules.lock().unwrap().stage(package){Ok(hash)=>hash,Err(_)=>continue};let notified=ctx.db.get("RustModuleUpdates",&name);if notified.as_str()==Some(&hash){continue;}let text=format!("Module update: {name}\n{url}\n{}dlm {url}",ctx.db.prefix());if ctx.client.send_message(grammers_session::types::PeerId::self_user().to_ambient_ref(),text).await.is_ok(){let _=ctx.db.set("RustModuleUpdates",&name,hash);}}});},
+            _=loop_tick.tick()=>{if let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let ctx=context.clone();tasks.spawn(async move {let _permit=permit;crate::module_lifecycle::poll_config_changes(&ctx).await;});}let packages=context.modules.lock().unwrap().export();for (package,task) in scheduler.due(&packages,&context.db){if let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let ctx=context.clone();tasks.spawn(async move{let _permit=permit;let name=package.manifest.name.clone();if let Err(e)=ctx.run_loop(package,task).await{crate::module_lifecycle::report(&ctx,&name,"loop",&e);}});}}},
             _=flush.tick()=>{connection.session.flush()?;},
             _=backups.tick()=>{
                 let hours=context.db.get("RustBackup","hours").as_u64().unwrap_or(0);
@@ -470,14 +488,23 @@ async fn account_loop(mut connection: Connection, context: Arc<Context>) -> Resu
             Some(result)=tasks.join_next(),if !tasks.is_empty()=>{if let Err(e)=result{tracing::error!(error=%e,"handler panicked");}}
         }
     }
+    Ok::<_,anyhow::Error>(())
+    }.await;
     tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        crate::module_lifecycle::shutdown(&context),
+    )
+    .await;
     context.native.unload(&context.services()).await;
     context.jobs.cancel_all();
     while tasks.join_next().await.is_some() {}
-    updates
+    let sync_result = updates
         .sync_update_state()
         .await
-        .map_err(anyhow::Error::from_boxed)?;
+        .map_err(anyhow::Error::from_boxed);
     drop(updates);
-    connection.close().await
+    let close_result = connection.close().await;
+    run_result.and(sync_result).and(close_result)
 }

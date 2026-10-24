@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.base64 text eol=lf
+# Preserve byte-for-byte copies of upstream frontend and language packs.
+web-resources/** -text
+locales/original/** -text

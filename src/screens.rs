@@ -179,6 +179,7 @@ pub fn config(ctx: &Context, module: &str) -> Result<Screen> {
 }
 pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Result<()> {
     let (mut config, _, validators) = config_data(ctx, module)?;
+    let old = config.clone();
     let value = if let Some(validator) = validators.get(key) {
         validator.validate(value)?
     } else {
@@ -195,7 +196,28 @@ pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Resul
     if module == crate::update_ui::MODULE {
         let _: crate::update_ui::Config = serde_json::from_value(config.clone())?;
     }
-    ctx.db.set(module, "__config__", config)
+    let notify = old != config && ctx.modules.lock().unwrap().package(module).is_some();
+    ctx.db.transaction(|data| {
+        data.entry(module)
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .context("invalid module namespace")?
+            .insert("__config__".into(), config.clone());
+        if notify {
+            let changes = data
+                .entry("RustModuleConfigChanges")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .context("invalid config queue")?;
+            let old = changes
+                .get(module)
+                .and_then(|v| v.get("old"))
+                .cloned()
+                .unwrap_or(old);
+            changes.insert(module.into(), serde_json::json!({"old":old,"new":config}));
+        }
+        Ok(())
+    })
 }
 pub fn config_for_unit(ctx: &Context, module: &str, unit: &str) -> Result<Screen> {
     let mut screen = config(ctx, module)?;

@@ -9,9 +9,9 @@ use grammers_client::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
-pub const MODULE: &str = "atarustiaInfo";
+pub const MODULE: &str = "ataraxiaInfo";
 pub const BANNER: &str =
-    "https://raw.githubusercontent.com/qhozek/atarustia/main/assets/atarustia.png";
+    "https://git.break.wtf/xenside/ataraxia/media/branch/main/assets/ataraxia.png";
 pub const PLACEHOLDERS: &[&str] = &[
     "me",
     "codename",

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0a0b">
+  <meta name="referrer" content="no-referrer">
+  <title>ataraxia</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛈️</text></svg>">
+  <link rel="stylesheet" href="static/app.css">
+  <script type="module" src="static/app.js"></script>
+</head>
+<body>
+  <svg class="wires" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <path d="M520 -40 Q 1010 420 1660 760"/>
+    <path d="M-60 520 Q 90 760 230 1060"/>
+    <path d="M-60 560 Q 70 790 190 1060"/>
+    <path d="M-60 610 Q 50 820 150 1060"/>
+  </svg>
+
+  <main class="wrap">
+    <div class="plate" id="plate">
+      <canvas></canvas>
+      <img class="plate__mark" src="static/wordmark.png" alt="ataraxia" draggable="false">
+      <svg class="plate__bolt" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13.5h6L9.5 22 19 9.5h-6.2z"/></svg>
+      <span class="plate__tag">userbot · telegram</span>
+      <span class="plate__ver" id="version"></span>
+    </div>
+
+    <section class="screen" data-screen="loading">
+      <div class="spinner"></div>
+    </section>
+
+    <section class="screen" data-screen="auth">
+      <h1 data-t="auth_title"></h1>
+      <p class="lead" data-t="auth_text"></p>
+      <p class="hint" id="auth-link"></p>
+      <div class="wait" hidden>
+        <div class="wait__bar"><i></i></div>
+        <p class="hint"><span data-t="auth_wait"></span> <b class="mono" id="countdown"></b></p>
+      </div>
+      <p class="error" role="alert"></p>
+      <button class="btn" id="auth-send" data-t="auth_send"></button>
+    </section>
+
+    <section class="screen" data-screen="app">
+      <h1 data-t="app_title"></h1>
+      <p class="lead" data-t="app_text"></p>
+      <form id="app-form" novalidate>
+        <div class="choices" id="apps"></div>
+        <div class="custom" id="custom" hidden>
+          <label class="field">
+            <span data-t="api_id"></span>
+            <input id="api-id" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="12345678">
+          </label>
+          <label class="field">
+            <span data-t="api_hash"></span>
+            <input id="api-hash" class="mono" autocomplete="off" spellcheck="false" placeholder="0123456789abcdef0123456789abcdef">
+          </label>
+          <p class="hint"><span data-t="api_where"></span> <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org</a></p>
+        </div>
+        <p class="error" role="alert"></p>
+        <button class="btn" data-t="next"></button>
+      </form>
+    </section>
+
+    <section class="screen" data-screen="login">
+      <h1 id="login-title"></h1>
+      <div class="tabs" role="tablist">
+        <button role="tab" data-method="qr" data-t="by_qr"></button>
+        <button role="tab" data-method="phone" data-t="by_phone"></button>
+      </div>
+      <div class="method" data-panel="qr">
+        <div class="qr" id="qr"><div class="spinner"></div></div>
+        <ol class="steps">
+          <li data-t="qr_1"></li>
+          <li data-t="qr_2"></li>
+          <li data-t="qr_3"></li>
+        </ol>
+      </div>
+      <form class="method" data-panel="phone" id="phone-form" novalidate>
+        <label class="field">
+          <span data-t="phone"></span>
+          <input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 900 000-00-00">
+        </label>
+        <p class="error" role="alert"></p>
+        <button class="btn" data-t="get_code"></button>
+      </form>
+      <p class="error" data-for="qr" role="alert"></p>
+      <button class="link" id="change-app" data-t="change_app"></button>
+    </section>
+
+    <section class="screen" data-screen="code">
+      <h1 data-t="code_title"></h1>
+      <p class="lead" id="code-text"></p>
+      <form id="code-form" novalidate>
+        <label class="otp">
+          <input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" aria-label="code">
+          <span class="otp__cells" id="cells"></span>
+        </label>
+        <p class="error" role="alert"></p>
+        <button class="btn" data-t="sign_in"></button>
+      </form>
+      <button class="link" data-back data-t="other_number"></button>
+    </section>
+
+    <section class="screen" data-screen="password">
+      <h1 data-t="password_title"></h1>
+      <p class="lead" data-t="password_text"></p>
+      <form id="password-form" novalidate>
+        <label class="field">
+          <span data-t="password"></span>
+          <input id="password" type="password" autocomplete="current-password">
+        </label>
+        <p class="hint" id="hint"></p>
+        <p class="error" role="alert"></p>
+        <button class="btn" data-t="sign_in"></button>
+      </form>
+      <button class="link" data-back data-t="start_over"></button>
+    </section>
+
+    <section class="screen" data-screen="done">
+      <svg class="check" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="24"/><path d="M15 27l7.5 7.5L37.5 19"/></svg>
+      <h1 id="done-title"></h1>
+      <p class="lead" data-t="done_text"></p>
+    </section>
+
+    <section class="screen" data-screen="limit">
+      <h1 data-t="limit_title"></h1>
+      <p class="lead" data-t="limit_text"></p>
+    </section>
+
+    <noscript><p class="lead">ataraxia needs JavaScript</p></noscript>
+  </main>
+</body>
+</html>

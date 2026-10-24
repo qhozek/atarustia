@@ -1,0 +1,14 @@
+{
+  "manifest": {
+    "name": "lifecycle_demo",
+    "description": "Lifecycle hooks, background media and self-suspension",
+    "commands": [
+      {"name": "demo_status", "description": "Show saved lifecycle state", "function": "status"},
+      {"name": "demo_pause", "description": "Ask the runtime to pause this module", "function": "pause"}
+    ],
+    "config": {"label": "demo"},
+    "lifecycle": {"install": "installed", "ready": "ready", "unload": "unload", "config_change": "changed"},
+    "loops": [{"function": "tick", "interval_seconds": 3600, "autostart": false}]
+  },
+  "source": "fn installed(event, config) { #{state: #{starts: 0, label: config.label}} } fn ready(event, config) { let count = if state == () { 0 } else { state.starts }; #{state: #{starts: count + 1, label: config.label}} } fn unload(event, config) { #{state: #{starts: state.starts, label: state.label, last_unload: event.data.reason}} } fn changed(event, config) { #{state: #{starts: state.starts, label: config.label}} } fn status(args, config) { #{text: json_stringify(state)} } fn pause(args, config) { #{suspend: \"Paused by demo command\", text: \"Reload this package with .lm to resume\"} } fn tick(event, config) { #{media: #{kind: \"photo\", source: #{type: \"url\", url: \"https://example.com/photo.jpg\"}}, text: config.label} }"
+}
