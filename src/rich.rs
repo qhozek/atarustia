@@ -183,6 +183,7 @@ pub fn styled_button_html(
         crate::markup::Style::Primary => attrs.push_str(" style=\"primary\""),
         crate::markup::Style::Success => attrs.push_str(" style=\"success\""),
         crate::markup::Style::Danger => attrs.push_str(" style=\"danger\""),
+        crate::markup::Style::Link => attrs.push_str(" style=\"link\""),
         _ => {}
     }
     let html = html.replacen("<tg-button", &format!("<tg-button{attrs}"), 1);

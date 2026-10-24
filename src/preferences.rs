@@ -53,7 +53,12 @@ pub fn watcher_policy(db: &Database, module: &str) -> WatcherPolicy {
 pub fn hidden(db: &Database, module: &str) -> bool {
     db.get("atarustia.help", "hidden")
         .as_array()
-        .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(module)))
+        .is_some_and(|a| {
+            a.iter().any(|v| {
+                v.as_str()
+                    .is_some_and(|name| crate::original::canonical_module(name) == module)
+            })
+        })
 }
 #[allow(clippy::too_many_arguments)] // Pure predicate; every authorization input is explicit for tests.
 pub fn addressed(
@@ -119,7 +124,7 @@ pub async fn execute(ctx: &Context, m: &Message, cmd: &str, args: &str) -> Resul
         "helphide" => {
             ensure!(!args.is_empty(), "usage: helphide <module...>");
             let modules = crate::help::catalog(ctx).modules;
-            let mut result = vec![];
+            let (mut hidden, mut shown) = (vec![], vec![]);
             for name in args.split_whitespace() {
                 ensure!(
                     modules.iter().any(|m| m.name.eq_ignore_ascii_case(name)),
@@ -130,13 +135,32 @@ pub async fn execute(ctx: &Context, m: &Message, cmd: &str, args: &str) -> Resul
                     .find(|m| m.name.eq_ignore_ascii_case(name))
                     .unwrap()
                     .name;
-                let hidden = crate::help::toggle_hidden(ctx, name)?;
-                result.push(format!(
-                    "{name}: {}",
-                    if hidden { "hidden" } else { "visible" }
-                ));
+                if crate::help::toggle_hidden(ctx, name)? {
+                    hidden.push(name.clone());
+                } else {
+                    shown.push(name.clone());
+                }
             }
-            result.join("\n")
+            let text = ctx.original(
+                "ataraxia_info",
+                "hidden_shown",
+                &[
+                    hidden.len().to_string(),
+                    shown.len().to_string(),
+                    hidden
+                        .iter()
+                        .map(|m| format!("👁‍🗨 <i>{}</i>", crate::output::escape(m)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    shown
+                        .iter()
+                        .map(|m| format!("👁 <i>{}</i>", crate::output::escape(m)))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ],
+            );
+            ctx.answer_html(m, &text).await?;
+            return Ok(None);
         }
         "nonickcmd" => {
             ensure!(
@@ -144,10 +168,20 @@ pub async fn execute(ctx: &Context, m: &Message, cmd: &str, args: &str) -> Resul
                     || ctx.modules.lock().unwrap().command(args).is_some(),
                 "unknown command"
             );
-            format!(
-                "NoNick {args}: {}",
-                toggle(&ctx.db, "atarustia.main", "nonickcmds", json!(args))?
+            let on = toggle(&ctx.db, "atarustia.main", "nonickcmds", json!(args))?;
+            ctx.answer_html(
+                m,
+                &ctx.original(
+                    "settings",
+                    "cmd_nn",
+                    &[
+                        crate::output::escape(&format!("{}{args}", ctx.db.prefix())),
+                        if on { "on" } else { "off" }.into(),
+                    ],
+                ),
             )
+            .await?;
+            return Ok(None);
         }
         "nonickuser" => {
             let id = crate::security_commands::resolve_user(
@@ -156,27 +190,109 @@ pub async fn execute(ctx: &Context, m: &Message, cmd: &str, args: &str) -> Resul
                 if args.is_empty() { None } else { Some(args) },
             )
             .await?;
-            format!(
-                "NoNick {id}: {}",
-                toggle(&ctx.db, "atarustia.main", "nonickusers", json!(id))?
+            let on = toggle(&ctx.db, "atarustia.main", "nonickusers", json!(id))?;
+            ctx.answer_html(
+                m,
+                &ctx.original(
+                    "settings",
+                    "user_nn",
+                    &[if on { "on" } else { "off" }.into()],
+                ),
             )
+            .await?;
+            return Ok(None);
         }
-        "nonickchat" => format!(
-            "NoNick chat: {}",
-            toggle(
+        "nonickchat" => {
+            if m.peer_id().bot_api_dialog_id_unchecked() > 0 {
+                ctx.answer_html(m, &ctx.original("settings", "private_not_allowed", &[]))
+                    .await?;
+                return Ok(None);
+            }
+            let on = toggle(
                 &ctx.db,
                 "atarustia.main",
                 "nonickchats",
-                json!(m.peer_id().bot_api_dialog_id_unchecked())
-            )?
-        ),
+                json!(m.peer_id().bot_api_dialog_id_unchecked()),
+            )?;
+            let name = m
+                .peer()
+                .and_then(|p| p.name().map(str::to_owned))
+                .unwrap_or_default();
+            ctx.answer_html(
+                m,
+                &ctx.original(
+                    "settings",
+                    "cmd_nn",
+                    &[
+                        crate::output::escape(&name),
+                        if on { "on" } else { "off" }.into(),
+                    ],
+                ),
+            )
+            .await?;
+            return Ok(None);
+        }
         "nonickcmds" | "nonickusers" | "nonickchats" => {
-            serde_json::to_string_pretty(&ctx.db.get("atarustia.main", cmd))?
+            let ids = ctx.db.get("atarustia.main", cmd);
+            let ids = ids.as_array().cloned().unwrap_or_default();
+            let mut lines = vec![];
+            for value in ids {
+                if cmd == "nonickcmds" {
+                    if let Some(name) = value.as_str() {
+                        lines.push(format!(
+                            "▫️ <code>{}</code>",
+                            crate::output::escape(&format!("{}{name}", ctx.db.prefix()))
+                        ));
+                    }
+                    continue;
+                }
+                if let Some(id) = value.as_i64()
+                    && let Some(peer) = grammers_session::types::PeerId::from_bot_api_dialog_id(id)
+                    && let Ok(entity) = ctx.client.resolve_peer(peer.to_ambient_ref()).await
+                {
+                    let name = crate::output::escape(entity.name().unwrap_or(""));
+                    let url = if cmd == "nonickusers" {
+                        format!("tg://user?id={id}")
+                    } else {
+                        format!("https://t.me/c/{}", peer.bare_id_unchecked())
+                    };
+                    lines.push(format!("▫️ <b><a href=\"{url}\">{name}</a></b>"));
+                }
+            }
+            let text = if lines.is_empty() {
+                ctx.original("settings", "nothing", &[])
+            } else {
+                ctx.original(
+                    "settings",
+                    match cmd {
+                        "nonickcmds" => "cmd_nn_list",
+                        "nonickusers" => "user_nn_list",
+                        _ => "chat_nn_list",
+                    },
+                    &[lines.join("\n")],
+                )
+            };
+            ctx.answer_html(m, &text).await?;
+            return Ok(None);
         }
         "watchers" => {
             let list = ctx.modules.lock().unwrap().list();
-            let watchers:Vec<_>=list.into_iter().filter(|m|!m.watchers.is_empty()).map(|m|json!({"module":m.name,"watchers":m.watchers,"policy":watcher_policy(&ctx.db,&m.name)})).collect();
-            serde_json::to_string_pretty(&watchers)?
+            let lines = list
+                .into_iter()
+                .filter(|m| !m.watchers.is_empty())
+                .map(|m| {
+                    let p = watcher_policy(&ctx.db, &m.name);
+                    format!(
+                        "{} {}",
+                        if p.disabled { "💢" } else { "♻️" },
+                        crate::output::escape(&m.name)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            ctx.answer_html(m, &ctx.original("settings", "watchers", &[lines]))
+                .await?;
+            return Ok(None);
         }
         "watcher" | "watcherbl" => {
             let mut p = args.split_whitespace();

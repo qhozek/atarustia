@@ -113,6 +113,12 @@ pub fn resolve(
         name = next.to_lowercase();
         args = format!("{fixed} {args}").trim().into();
     }
+    name = match name.as_str() {
+        "cfg" => "config".into(),
+        "fcfg" => "fconfig".into(),
+        "eval" => "e".into(),
+        _ => name,
+    };
     Ok((name, args))
 }
 /// Token bucket; idle entries expire and capacity is bounded.

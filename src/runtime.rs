@@ -279,7 +279,7 @@ pub async fn run_with_modules(
         }
         let mut token = config.accounts[&name].bot_token.clone();
         if token.is_none() && !options.no_bot {
-            let username = format!("atarustia_{}_{}_bot", owner, rand::random::<u16>());
+            let username = crate::original::bot_username();
             match tokio::time::timeout(
                 Duration::from_secs(150),
                 crate::botfather::provision(&connection.client, &username),
@@ -380,7 +380,20 @@ pub async fn run_with_modules(
             }}
             Ok::<_,anyhow::Error>(())
         });
-        workers.spawn(async move{if !setup.db.get("RustSetup","ready").as_bool().unwrap_or(false){match tokio::time::timeout(Duration::from_secs(120),crate::content::setup(&setup.client,&setup.db)).await{Ok(Ok(_))=>{setup.db.set("RustSetup","ready",true)?;let _=setup.client.send_message(grammers_session::types::PeerId::self_user().to_ambient_ref(),format!("⛈ atarustia Rust\n{}help — commands\n{}config — module settings\n{}set_backup_period 24 — daily backups",setup.db.prefix(),setup.db.prefix(),setup.db.prefix())).await;},_=>tracing::warn!("content setup failed; use .setup to retry")}}Ok::<_,anyhow::Error>(())});
+        workers.spawn(async move {
+            match tokio::time::timeout(
+                Duration::from_secs(120),
+                crate::content::setup(&setup.client, &setup.db),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    setup.db.set("RustSetup", "ready", true)?;
+                }
+                _ => tracing::warn!("content setup failed; will retry on next start"),
+            }
+            Ok::<_, anyhow::Error>(())
+        });
         workers.spawn(async move {
             let _done = account_done.drop_guard();
             account_loop(connection, ctx).await

@@ -5,6 +5,8 @@ https://git.break.wtf/xenside/ataraxia
 Base port snapshot: c2f80d91dcc3fe4c5f3e388f31cb3229a3b66dc3.
 The web-resources/ frontend is copied byte-for-byte from snapshot
 a58e7019690abfec05e06b7383538fad39dc2d01 under the project's AGPL-3.0 license.
+assets/ataraxia.png, assets/bot_pfp.png and assets/ataraxia_backup.png are also
+copied byte-for-byte from that snapshot; their original artwork is preserved.
 Copyright and license notices in derived and vendored code remain applicable.
 
 grammers dependencies are MIT OR Apache-2.0. The local grammers-mtsender patch is distributed under

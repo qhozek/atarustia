@@ -54,6 +54,10 @@ pub struct Manifest {
     pub libraries: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub validators: std::collections::BTreeMap<String, crate::validators::Validator>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub config_docs: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub config_folders: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<crate::help::Metadata>,
     /// Runtime requirements checked before install: ffmpeg, inline, shell.
@@ -373,6 +377,16 @@ impl Package {
                     && parsed.username().is_empty()
                     && parsed.password().is_none(),
                 "packurl must be a plain HTTPS URL"
+            );
+        }
+        for metadata in [&self.manifest.config_docs, &self.manifest.config_folders] {
+            ensure!(
+                metadata.len() <= 256
+                    && metadata
+                        .iter()
+                        .all(|(key, value)| self.manifest.config.get(key).is_some()
+                            && value.len() <= 8192),
+                "invalid configuration metadata"
             );
         }
         for (key, validator) in &self.manifest.validators {

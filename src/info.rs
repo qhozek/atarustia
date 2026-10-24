@@ -164,20 +164,13 @@ impl Snapshot {
     pub fn render(&self, config: &Config, english: bool, rich: bool) -> Result<String> {
         let prefix = escape(&self.prefix);
         let status = match self.up_to_date {
-            Some(true) => {
-                if english {
-                    "<b>Up-to-date</b>".into()
-                } else {
-                    "<b>Актуальная версия</b>".into()
-                }
-            }
-            Some(false) => format!(
-                "<b>{}</b> <code>{prefix}update</code>",
-                if english {
-                    "Update required"
-                } else {
-                    "Требуется обновление"
-                }
+            Some(true) => crate::original::text(english, "ataraxia_info", "up-to-date"),
+            Some(false) => crate::original::message(
+                english,
+                "ataraxia_info",
+                "update_required",
+                &[],
+                &[("prefix", prefix.clone())],
             ),
             None => {
                 if english {
@@ -232,28 +225,12 @@ impl Snapshot {
         if let Some(template) = config.custom_message.as_ref().filter(|s| !s.is_empty()) {
             return substitute(template, &values);
         }
-        let icon = |i: usize| {
-            let (id, alt) = ICONS[i];
-            if rich {
-                format!("<tg-emoji emoji-id=\"{id}\">{alt}</tg-emoji>")
-            } else {
-                alt.into()
-            }
-        };
-        let br = if rich { "<br>" } else { "\n" };
-        let text = format!(
-            "<blockquote>{} <b>Owner:</b> {{me}}</blockquote>\n<blockquote>{} <b>Codename:</b> <i>atarustia · {{codename}}</i>{br}{} <b>Branch:</b> {{branch}} ({{commit}}){br}{} {{upd}}</blockquote>\n<blockquote>{} <b>Prefix: </b>{{prefix}}{br}{} <b>Uptime:</b> {{uptime}}</blockquote>\n<blockquote>{} <b>CPU usage:</b> {{cpu_usage}}{br}{} <b>RAM usage:</b> {{ram_usage}}{br}{} <b>Kernel:</b> {{kernel}}{br}{} <b>Host:</b> {{platform}}</blockquote>",
-            icon(0),
-            icon(1),
-            icon(2),
-            icon(3),
-            icon(4),
-            icon(5),
-            icon(6),
-            icon(7),
-            icon(8),
-            icon(9)
+        let text = crate::original::text(
+            english,
+            "ataraxia_info",
+            if rich { "info_rich" } else { "info_message" },
         );
+        let text = crate::original::emoji_html(&text, rich);
         substitute(&text, &values)
     }
 }
@@ -419,6 +396,10 @@ async fn deliver(
 
 pub async fn send(ctx: &crate::commands::Context, message: &Message) -> Result<()> {
     let config = Config::load(&ctx.db)?;
+    let (snapshot, premium) = snapshot(ctx).await?;
+    send_snapshot(ctx, message, config, snapshot, premium).await
+}
+pub async fn snapshot(ctx: &crate::commands::Context) -> Result<(Snapshot, bool)> {
     let (me, host, branch, commit, update) = tokio::join!(
         tokio::time::timeout(Duration::from_secs(15), ctx.client.get_me()),
         tokio::task::spawn_blocking(host),
@@ -446,7 +427,7 @@ pub async fn send(ctx: &crate::commands::Context, message: &Message) -> Result<(
             .collect::<Vec<_>>()
             .join(" "),
         prefix: ctx.db.prefix(),
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: crate::original::CODENAME.into(),
         uptime: ctx.start.elapsed().as_secs(),
         branch: branch
             .filter(|s| !s.is_empty())
@@ -461,6 +442,16 @@ pub async fn send(ctx: &crate::commands::Context, message: &Message) -> Result<(
         kernel: host.kernel,
         platform: host.platform,
     };
+    let premium = matches!(&me.raw, tl::enums::User::User(user) if user.premium);
+    Ok((snapshot, premium))
+}
+async fn send_snapshot(
+    ctx: &crate::commands::Context,
+    message: &Message,
+    config: Config,
+    snapshot: Snapshot,
+    premium: bool,
+) -> Result<()> {
     let english = ctx.db.language().split_whitespace().next() == Some("en");
     let reply = match message.reply_header() {
         Some(tl::enums::MessageReplyHeader::Header(h)) => h.reply_to_msg_id,
@@ -468,7 +459,6 @@ pub async fn send(ctx: &crate::commands::Context, message: &Message) -> Result<(
     }
     .or_else(|| crate::telegram::topic(message))
     .or_else(|| (!message.outgoing()).then_some(message.id()));
-    let premium = matches!(&me.raw, tl::enums::User::User(user) if user.premium);
     if config.rich_mode && premium {
         let rich = snapshot.render(&config, english, true)?;
         let source = if config.banner_url.is_empty() {
@@ -501,7 +491,6 @@ pub async fn send(ctx: &crate::commands::Context, message: &Message) -> Result<(
             Err(e) => return Err(e.into()),
         }
     }
-    let mut config = config;
     let mut emoji = premium;
     loop {
         let input_value = input(&snapshot, &config, english, emoji, false, reply)?;
@@ -511,7 +500,8 @@ pub async fn send(ctx: &crate::commands::Context, message: &Message) -> Result<(
             Err(error) => {
                 let rpc = error.downcast_ref::<grammers_client::InvocationError>();
                 if !config.banner_url.is_empty() && rpc.is_some_and(|e| matches!(e, grammers_client::InvocationError::Rpc(r) if r.name == "WEBPAGE_MEDIA_EMPTY")) {
-                    config.banner_url.clear();
+                    let text=crate::original::message(english,"ataraxia_info","no_banner",&[],&[("link",escape(&config.banner_url))]);
+                    return ctx.answer_html(message,&text).await;
                 } else if emoji && rpc.is_some_and(|e| unsupported(e, false)) {
                     emoji = false;
                 } else { return Err(error); }

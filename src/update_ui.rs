@@ -21,7 +21,7 @@ pub fn user_body(
     };
     let mut html = screen.text.clone();
     if premium {
-        html = html.replace("<b>atarustia</b>", PREMIUM_LOGO);
+        html = html.replace("<b>ataraxia</b>", PREMIUM_LOGO);
         if html.starts_with("⛈️ ") {
             html = format!("{PREMIUM_LOGO} {}", &html["⛈️ ".len()..]);
         }
@@ -133,6 +133,27 @@ impl Ui {
         }
     }
     pub fn text(&self, key: &str, values: &[(&str, String)]) -> String {
+        if key != "sync_failed" {
+            let positional_names: &[&str] = match key {
+                "more_commits" => &["count"],
+                "update_failed" => &["error"],
+                "modules_failed" => &["names"],
+                "restart_success" => &["took"],
+                "restart_fail" => &["took", "failed"],
+                _ => &[],
+            };
+            let positional = positional_names
+                .iter()
+                .map(|name| {
+                    values
+                        .iter()
+                        .find(|(k, _)| k == name)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>();
+            return crate::original::message(self.english, "updater", key, &positional, values);
+        }
         let pack: serde_json::Value = serde_json::from_str(if self.english {
             include_str!("../locales/updater.en.json")
         } else {
@@ -342,7 +363,7 @@ impl Ui {
     }
     pub fn restart(&self) -> Screen {
         let mut result =
-            screen(self.text("restart_confirm", &[("logo", "<b>atarustia</b>".into())]));
+            screen(self.text("restart_confirm", &[("logo", "<b>ataraxia</b>".into())]));
         result.buttons = vec![vec![
             key(
                 format!("🔄 {}", self.text("btn_restart", &[])),
@@ -428,7 +449,7 @@ impl Ui {
         result
     }
     pub fn restarting(&self) -> Screen {
-        screen(self.text("restarting_caption", &[("logo", "<b>atarustia</b>".into())]))
+        screen(self.text("restarting_caption", &[("logo", "<b>ataraxia</b>".into())]))
     }
     pub fn completed(
         &self,
@@ -455,7 +476,7 @@ impl Ui {
             )
         };
         let values = [
-            ("logo", "<b>atarustia</b>".into()),
+            ("logo", "<b>ataraxia</b>".into()),
             (
                 "url",
                 format!(

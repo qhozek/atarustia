@@ -50,12 +50,15 @@ impl Validator {
                 Value::Number(ref n) if n.as_i64() == Some(1) => Value::Bool(true),
                 Value::Number(ref n) if n.as_i64() == Some(0) => Value::Bool(false),
                 Value::String(ref s)
-                    if matches!(s.to_lowercase().as_str(), "true" | "yes" | "on" | "1") =>
+                    if matches!(s.to_lowercase().as_str(), "true" | "yes" | "on" | "1" | "y") =>
                 {
                     Value::Bool(true)
                 }
                 Value::String(ref s)
-                    if matches!(s.to_lowercase().as_str(), "false" | "no" | "off" | "0") =>
+                    if matches!(
+                        s.to_lowercase().as_str(),
+                        "false" | "no" | "off" | "0" | "n"
+                    ) =>
                 {
                     Value::Bool(false)
                 }
@@ -130,6 +133,10 @@ impl Validator {
                         .collect(),
                     _ => anyhow::bail!("expected list"),
                 };
+                let array: Vec<_> = array
+                    .into_iter()
+                    .filter(|v| !v.is_null() && v.as_str() != Some(""))
+                    .collect();
                 ensure!(
                     min_len.is_none_or(|m| array.len() >= m)
                         && max_len.is_none_or(|m| array.len() <= m),
@@ -173,8 +180,11 @@ impl Validator {
                 matched.ok_or_else(|| anyhow::anyhow!("no matching validator"))?
             }
             Self::None => {
-                ensure!(value.is_null(), "expected null");
-                value
+                ensure!(
+                    value.is_null() || value.as_str().is_some_and(|s| s.trim().is_empty()),
+                    "expected null"
+                );
+                Value::Null
             }
         };
         Ok(value)

@@ -32,7 +32,8 @@ fn default_card_matches_original_layout_and_escapes_dynamic_fields() {
     assert_eq!(card.matches("<blockquote>").count(), 4);
     assert!(card.contains("Alice &lt;&amp;&gt; {prefix}"));
     assert!(card.contains("tg://user?id=123"));
-    assert!(card.contains("atarustia · 0.1.0"));
+    assert!(card.contains("<i>0.1.0</i>"));
+    assert!(!card.contains("atarustia ·"));
     assert!(card.contains("main&lt;&amp;&gt;"));
     assert!(card.contains("https://github.com/qhozek/atarustia/commit/"));
     assert!(card.contains("1 day(s), 1:01:01"));
@@ -52,6 +53,35 @@ fn default_card_matches_original_layout_and_escapes_dynamic_fields() {
             .count(),
         4
     );
+}
+#[test]
+fn standard_card_is_the_original_langpack_template_without_rebranding() {
+    let snapshot = snapshot();
+    let placeholders = regex::Regex::new(r"\{\w+\}").unwrap();
+    for english in [false, true] {
+        for rich in [false, true] {
+            let rendered = snapshot.render(&Config::default(), english, rich).unwrap();
+            assert!(!rendered.contains("atarustia ·"));
+            assert!(!rendered.contains("<emoji"));
+            let source = atarustia::original::emoji_html(
+                &atarustia::original::text(
+                    english,
+                    "ataraxia_info",
+                    if rich { "info_rich" } else { "info_message" },
+                ),
+                rich,
+            );
+            // Static labels and exact block boundaries are taken from the source, not translations of our own.
+            let mut rest = rendered.as_str();
+            for fragment in placeholders.split(&source) {
+                if fragment.is_empty() {
+                    continue;
+                }
+                let at = rest.find(fragment).expect("original template fragment");
+                rest = &rest[at + fragment.len()..];
+            }
+        }
+    }
 }
 #[test]
 fn unknown_measurements_and_updates_are_not_reported_as_success_or_zero() {

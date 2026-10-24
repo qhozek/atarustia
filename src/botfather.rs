@@ -82,17 +82,39 @@ pub async fn provision(client: &Client, username: &str) -> Result<String> {
             !reply.text().contains("Too many") && !reply.text().contains("That I cannot do"),
             "BotFather refused creation; check your bot limit"
         );
-        conversation.ask("atarustia Rust").await?;
+        conversation.ask(crate::original::BOT_NAME).await?;
         let reply = conversation.ask(username).await?;
         let token = extract_token(reply.text())
             .context("BotFather did not return a token; username may be occupied")?;
         let setup = async {
             conversation.ask("/setinline").await?;
             conversation.ask(&format!("@{username}")).await?;
-            conversation.ask("atarustia · command").await?;
+            conversation
+                .ask(crate::original::INLINE_PLACEHOLDER)
+                .await?;
             conversation.ask("/setinlinefeedback").await?;
             conversation.ask(&format!("@{username}")).await?;
             conversation.ask("Enabled").await?;
+            let avatar = async {
+                conversation.ask("/setuserpic").await?;
+                conversation.ask(&format!("@{username}")).await?;
+                let bytes = include_bytes!("../assets/bot_pfp.png");
+                let file = client
+                    .upload_stream(&mut bytes.as_slice(), bytes.len(), "bot_pfp.png".into())
+                    .await?;
+                let message = client
+                    .send_message(
+                        conversation.peer,
+                        grammers_client::message::InputMessage::new().photo(file),
+                    )
+                    .await?;
+                conversation.trash.push(message.id());
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if avatar.is_err() {
+                tracing::warn!("could not set inline bot avatar");
+            }
             Ok::<_, anyhow::Error>(())
         }
         .await;

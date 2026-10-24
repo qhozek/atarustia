@@ -10,7 +10,7 @@ use grammers_client::{
 pub async fn store_asset(client: &Client, db: &Database, message: &Message) -> Result<i32> {
     let (peer, topic) = crate::content::topic_destination(client, db, "Assets")
         .await?
-        .context("Assets topic unavailable; run .setup")?;
+        .context("Assets topic unavailable; service chat setup will be retried on restart")?;
     let media = message.media();
     let mut input = InputMessage::new()
         .text(message.text())

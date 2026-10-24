@@ -20,12 +20,11 @@ impl BotHandle {
             .sender_id()
             .map(|s| s.bare_id_unchecked())
             .unwrap_or(context.owner);
-        let (id, _body) =
-            context
-                .forms
-                .lock()
-                .unwrap()
-                .create(screen, owner, vec![context.owner])?;
+        let (id, _body) = context.forms.lock().unwrap().create(
+            screen,
+            owner,
+            security::owners(&context.db, context.owner),
+        )?;
         if let crate::dispatcher::Parsed::Command { name, args } = crate::dispatcher::parse(
             message.text(),
             &context.db.prefix_for(Some(owner), context.owner),
@@ -89,7 +88,8 @@ impl BotHandle {
                             r.id.clone()
                         }
                     };
-                    context
+                    let random_id = rand::random();
+                    let sent = context
                         .client
                         .invoke(
                             &grammers_client::tl::functions::messages::SendInlineBotResult {
@@ -112,7 +112,7 @@ impl BotHandle {
                                     }
                                     .into(),
                                 ),
-                                random_id: rand::random(),
+                                random_id,
                                 query_id: results.query_id,
                                 id: result_id,
                                 schedule_date: None,
@@ -122,6 +122,14 @@ impl BotHandle {
                             },
                         )
                         .await?;
+                    // Do not bind an unrelated message carried by the same Updates envelope.
+                    if let Ok(sent) = crate::bot_response::sent(&sent, peer, random_id, "", None) {
+                        context.forms.lock().unwrap().bind_message(
+                            &id,
+                            sent.chat_id,
+                            sent.message_id,
+                        );
+                    }
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
@@ -143,6 +151,10 @@ impl BotHandle {
                 context.forms.lock().unwrap().remove(&id);
                 anyhow::bail!("inline form timed out");
             }
+        }
+        if message.outgoing() && context.forms.lock().unwrap().configuration(&id) {
+            // Config/settings replace the owner's command, as the original form does.
+            let _ = message.delete().await;
         }
         Ok(())
     }
@@ -211,6 +223,31 @@ async fn run_inner(
         bot = me.username().unwrap_or("unknown"),
         "inline bot connected over MTProto"
     );
+    if let Some(bot) = context.bot.read().await.clone() {
+        let greet = async {
+            let peer = context
+                .client
+                .resolve_username(&bot.bot.username)
+                .await?
+                .context("inline bot not found")?
+                .to_ref()
+                .await
+                .map_err(anyhow::Error::from_boxed)?
+                .context("bot peer missing")?;
+            let init = context
+                .client
+                .send_message(peer, "/start ataraxia init")
+                .await?;
+            let _ = init.delete().await;
+            crate::presentation::greet(&context, &bot.bot).await
+        };
+        if !matches!(
+            tokio::time::timeout(Duration::from_secs(30), greet).await,
+            Ok(Ok(()))
+        ) {
+            tracing::warn!("quickstart message deferred");
+        }
+    }
     if let Err(error) = crate::update_flow::complete_for(&context, true).await {
         tracing::warn!(error=%error,"restart report deferred");
     }
@@ -244,6 +281,52 @@ async fn run_inner(
     connection.close().await
 }
 async fn handle(context: &Context, update: Update) -> Result<()> {
+    if crate::config_ui::handle_bot_update(context, &update).await? {
+        return Ok(());
+    }
+    if let Update::CallbackQuery(query) = &update
+        && let Some(lang) = std::str::from_utf8(query.data())
+            .ok()
+            .and_then(|d| d.strip_prefix("ataraxia/lang/"))
+    {
+        if security::owners(&context.db, context.owner)
+            .contains(&query.sender_id().bare_id_unchecked())
+            && matches!(lang, "en" | "ru")
+        {
+            context.db.set("atarustia.translations", "lang", lang)?;
+            query
+                .answer()
+                .text(crate::original::text(
+                    lang == "en",
+                    "quickstart",
+                    "language_saved",
+                ))
+                .send()
+                .await?;
+            let body = crate::presentation::quickstart(
+                lang == "en",
+                context
+                    .db
+                    .get("RustRuntime", "premium")
+                    .as_bool()
+                    .unwrap_or(false),
+            )?;
+            if let Some(bot) = context.bot.read().await.clone() {
+                bot.bot.edit_callback(query, body).await?;
+            }
+        } else {
+            query
+                .answer()
+                .alert(crate::original::text(
+                    context.db.language().starts_with("en"),
+                    "$inline",
+                    "button403",
+                ))
+                .send()
+                .await?;
+        }
+        return Ok(());
+    }
     if let Update::CallbackQuery(query) = &update
         && let Some(token) = std::str::from_utf8(query.data())
             .ok()
@@ -386,11 +469,33 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
         }
     }
     match update {
-        Update::NewMessage(m)
-            if !m.outgoing()
-                && owners.contains(&m.sender_id().map(|s| s.bare_id_unchecked()).unwrap_or(0)) =>
-        {
-            if m.text() == "/start" || m.text() == "/help" {
+        Update::NewMessage(m) if !m.outgoing() => {
+            if m.text() == "/start" {
+                let bot = context
+                    .bot
+                    .read()
+                    .await
+                    .clone()
+                    .context("inline bot unavailable")?;
+                let bytes = include_bytes!("../assets/ataraxia.png").to_vec();
+                let media = crate::media::Media {
+                    kind: crate::file_id::FileKind::Photo,
+                    source: crate::media::Source::Bytes {
+                        name: "ataraxia.png".into(),
+                        data: bytes,
+                    },
+                    ..Default::default()
+                };
+                bot.bot
+                    .send_media(
+                        crate::telegram::peer(&m).await?,
+                        &media,
+                        crate::presentation::start_card(context.db.language().starts_with("en"))?,
+                    )
+                    .await?;
+            } else if m.text() == "/help"
+                && owners.contains(&m.sender_id().map(|s| s.bare_id_unchecked()).unwrap_or(0))
+            {
                 let screen = crate::help::build(
                     context,
                     m.sender_id()
@@ -433,7 +538,27 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         return Ok(());
                     }
                 };
+                if let grammers_client::tl::enums::Update::InlineBotCallbackQuery(raw) = &q.raw {
+                    context
+                        .forms
+                        .lock()
+                        .unwrap()
+                        .bind_inline(&click.unit, crate::file_id::encode_inline_id(&raw.msg_id));
+                }
                 use crate::forms::Action;
+                if matches!(
+                    click.action,
+                    Action::Configure { .. }
+                        | Action::Settings { .. }
+                        | Action::SettingsMaintenance { .. }
+                ) && !owners.contains(&q.sender_id().bare_id_unchecked())
+                {
+                    q.answer()
+                        .alert(crate::config_ui::ui(context).text("owner_only"))
+                        .send()
+                        .await?;
+                    return Ok(());
+                }
                 if !owners.contains(&q.sender_id().bare_id_unchecked()) {
                     let gate = context.forms.lock().unwrap().gate(&click.unit);
                     let inline_command = context.forms.lock().unwrap().inline_command(&click.unit);
@@ -489,6 +614,97 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     }
                 }
                 let message = match click.action {
+                    Action::Configure { state, operation } => {
+                        anyhow::ensure!(
+                            owners.contains(&q.sender_id().bare_id_unchecked()),
+                            "{}",
+                            crate::config_ui::ui(context).text("owner_only")
+                        );
+                        let (screen, toast) =
+                            if matches!(operation, crate::config_ui::Operation::Navigate) {
+                                (
+                                    crate::config_ui::build(context, &state, Some(&click.unit))?,
+                                    None,
+                                )
+                            } else {
+                                crate::config_ui::changed_screen(
+                                    context,
+                                    &state,
+                                    &operation,
+                                    None,
+                                    &click.unit,
+                                )?
+                            };
+                        crate::module_lifecycle::config_changes(context).await;
+                        if let Some(toast) = toast {
+                            q.answer().text(toast).send().await?;
+                        } else {
+                            q.answer().send().await?;
+                        }
+                        context.forms.lock().unwrap().replace(&click.unit, screen)?
+                    }
+                    Action::Settings { key, value } => {
+                        anyhow::ensure!(
+                            owners.contains(&q.sender_id().bare_id_unchecked()),
+                            "owner only settings"
+                        );
+                        if let Some(key) = key {
+                            anyhow::ensure!(
+                                matches!(
+                                    key.as_str(),
+                                    "no_nickname" | "grep" | "inlinelogs" | "suggest_subscribe"
+                                ),
+                                "unknown setting"
+                            );
+                            context.db.set("atarustia.main", &key, value)?;
+                            if key == "no_nickname" && value && context.db.prefix() == "." {
+                                q.answer()
+                                    .alert(crate::original::text(
+                                        crate::config_ui::ui(context).english,
+                                        "settings",
+                                        "nonick_warning",
+                                    ))
+                                    .send()
+                                    .await?;
+                            } else {
+                                q.answer().text("Configuration value saved!").send().await?;
+                            }
+                        }
+                        context
+                            .forms
+                            .lock()
+                            .unwrap()
+                            .replace(&click.unit, crate::config_ui::settings(context))?
+                    }
+                    Action::SettingsMaintenance { restart, confirmed } => {
+                        anyhow::ensure!(
+                            owners.contains(&q.sender_id().bare_id_unchecked()),
+                            "owner only settings"
+                        );
+                        if confirmed {
+                            let action = if restart {
+                                Action::Restart
+                            } else {
+                                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+                                let changes = crate::updater::check(root).await?;
+                                Action::Update {
+                                    current: changes.current,
+                                    incoming: changes.incoming,
+                                    retry: false,
+                                }
+                            };
+                            return crate::update_flow::callback(context, &q, click.unit, action)
+                                .await;
+                        }
+                        q.answer().send().await?;
+                        context.forms.lock().unwrap().replace(
+                            &click.unit,
+                            crate::config_ui::settings_confirmation(
+                                crate::config_ui::ui(context).english,
+                                restart,
+                            ),
+                        )?
+                    }
                     action @ (Action::Update { .. } | Action::Restart | Action::UpdateDismiss) => {
                         return crate::update_flow::callback(context, &q, click.unit, action).await;
                     }
@@ -512,6 +728,25 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         context.forms.lock().unwrap().render(&click.unit, page)?
                     }
                     Action::Close => {
+                        let target = {
+                            let forms = context.forms.lock().unwrap();
+                            forms
+                                .configuration(&click.unit)
+                                .then(|| forms.destination(&click.unit))
+                                .flatten()
+                        };
+                        if let Some((chat, id)) = target {
+                            let peer =
+                                grammers_session::types::PeerId::from_bot_api_dialog_id(chat)
+                                    .context("invalid form chat")?;
+                            context
+                                .client
+                                .delete_messages(peer.to_ambient_ref(), &[id])
+                                .await?;
+                            context.forms.lock().unwrap().remove(&click.unit);
+                            q.answer().send().await?;
+                            return Ok(());
+                        }
                         context.forms.lock().unwrap().remove(&click.unit);
                         InputMessage::new()
                             .text("✕")
@@ -770,16 +1005,14 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 q.answer([result]).private().cache_time(0).send().await?;
                 return Ok(());
             }
-            let body = if q.text().trim() == "ping" {
-                InputMessage::new().text("Pong 🦀")
-            } else {
-                screen(context, q.sender_id().bare_id_unchecked(), 0).await?
-            };
-            q.answer([Article::new("atarustia", body).description("Native Rust userbot")])
-                .private()
-                .cache_time(0)
-                .send()
-                .await?;
+            q.answer(
+                crate::presentation::inline_catalog(context, q.sender_id().bare_id_unchecked())
+                    .await?,
+            )
+            .private()
+            .cache_time(0)
+            .send()
+            .await?;
         }
         Update::GuestChatQuery(q) => {
             if !owners.contains(
@@ -797,9 +1030,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                 .skip_while(|s| s.starts_with('@'))
                 .collect::<Vec<_>>()
                 .join(" ");
-            if text == "ping" {
-                q.answer(Article::new("Pong", "Pong 🦀")).await?;
-            } else {
+            {
                 let (name, args) = text.split_once(char::is_whitespace).unwrap_or((&text, ""));
                 let package = context
                     .modules

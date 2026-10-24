@@ -149,19 +149,20 @@ fn command(name: &str, description: &str) -> Command {
         text_allowed: true,
     }
 }
-fn core_group(name: &str) -> &'static str {
+pub fn core_group(name: &str) -> &'static str {
     match name {
-        "info" | "ataraxia" | "help" | "helphide" => crate::info::MODULE,
+        "info" | "help" | "helphide" => crate::info::MODULE,
         "update" | "restart" | "source" => crate::update_ui::MODULE,
-        "config" | "fconfig" => "atarustiaConfig",
-        "weburl" | "addacc" => "atarustiaWeb",
+        "config" | "fconfig" => "ataraxiaConfig",
+        "weburl" | "addacc" => "ataraxiaWeb",
         "backupall" | "backupdb" | "backupmods" | "restoreall" | "restoredb" | "restoremods"
-        | "set_backup_period" | "importbackup" => "atarustiaBackup",
+        | "set_backup_period" => "ataraxiaBackup",
         "e" | "terminal" | "terminate" | "ec" | "ecpp" | "enode" => "Executor",
-        "dlm" | "lm" | "approve" | "review" | "ulm" | "ml" | "modules" | "clearmodules" => "Loader",
-        "api_fw_protection" | "suspend_api_protect" => "APIRatelimiter",
+        "dlm" | "lm" | "ulm" | "ml" | "clearmodules" => "Loader",
+        "api_fw_protection" | "suspend_api_protect" => "APILimiter",
         "setlang" | "dllangpack" => "Translations",
-        "ping" | "logs" | "clearlogs" | "tglogs" => "Tester",
+        "ping" | "logs" | "clearlogs" | "suspend" => "Tester",
+        "ch_ataraxia_bot" | "ch_bot_token" => "InlineStuff",
         name if crate::security_commands::COMMANDS
             .iter()
             .any(|(n, _)| *n == name)
@@ -170,14 +171,14 @@ fn core_group(name: &str) -> &'static str {
                 "security" | "owneradd" | "ownerrm" | "ownerlist" | "tsec"
             ) =>
         {
-            "atarustiaSecurity"
+            "ataraxiaSecurity"
         }
         _ => "Settings",
     }
 }
 pub fn catalog(ctx: &Context) -> Catalog {
     let mut core: BTreeMap<&str, Module> = BTreeMap::new();
-    for (name, doc) in crate::commands::BUILTINS
+    for (name, _) in crate::commands::BUILTINS
         .iter()
         .chain(crate::preferences::COMMANDS)
         .chain(crate::security_commands::COMMANDS)
@@ -187,51 +188,47 @@ pub fn catalog(ctx: &Context) -> Catalog {
         let english = ctx.db.language().starts_with("en");
         let m = core.entry(group).or_insert_with(|| Module {
             name: group.into(),
-            description: match group {
-                crate::info::MODULE => "Userbot info and help",
-                crate::update_ui::MODULE => {
-                    "Updates, restarts, and tracks latest atarustia releases"
-                }
-                "Loader" => "Install and manage reviewed modules",
-                "atarustiaSecurity" => "Command permissions and access groups",
-                "atarustiaBackup" => "Database and module backups",
-                "atarustiaConfig" => "Module configuration",
-                "atarustiaWeb" => "Account login and web access",
-                "Executor" => "Rhai and native command execution",
-                "Translations" => "Languages and translations",
-                "Tester" => "Diagnostics and logs",
-                "APIRatelimiter" => "Command rate limits",
-                _ => "Account settings and preferences",
-            }
-            .into(),
+            description: crate::original::module_description(english, group),
             core: true,
-            configurable: matches!(group, crate::info::MODULE | crate::update_ui::MODULE),
+            configurable: matches!(
+                group,
+                crate::info::MODULE | crate::update_ui::MODULE | "Settings" | "Tester"
+            ),
             hidden: crate::preferences::hidden(&ctx.db, group),
             commands: vec![],
-            metadata: Metadata {
-                version: Some(env!("CARGO_PKG_VERSION").into()),
-                ..Default::default()
-            },
+            metadata: Metadata::default(),
         });
-        let description = crate::original::text(english, source, "_cls_doc");
-        if description != "_cls_doc" {
-            m.description = description;
-        }
         let key = format!("_cmd_doc_{name}");
-        let description = crate::original::text(english, source, &key);
-        m.commands.push(command(
-            name,
-            if description == key {
-                doc
-            } else {
-                &description
-            },
-        ));
+        let mut description = crate::original::text(english, source, &key);
+        if description == key {
+            description = match *name {
+                "ml" => "| send module via file".into(),
+                "clearmodule" => "Clear all DB entries for module: clearmodule <module>".into(),
+                _ => String::new(),
+            };
+        }
+        m.commands.push(command(name, &description));
     }
     let mut catalog = Catalog {
         modules: core.into_values().collect(),
         libraries: vec![],
     };
+    catalog.modules.push(Module {
+        name: "Quickstart".into(),
+        description: crate::original::text(
+            ctx.db.language().starts_with("en"),
+            "quickstart",
+            "_cls_doc",
+        ),
+        core: true,
+        configurable: false,
+        hidden: crate::preferences::hidden(&ctx.db, "Quickstart"),
+        commands: vec![],
+        metadata: Metadata::default(),
+    });
+    for module in &mut catalog.modules {
+        module.commands.sort_by(|a, b| a.name.cmp(&b.name));
+    }
     for package in ctx.modules.lock().unwrap().export() {
         let manifest = package.manifest;
         catalog.libraries.extend(manifest.libraries.keys().cloned());
@@ -371,15 +368,23 @@ pub struct Ui {
 }
 impl Ui {
     pub fn text(&self, key: &str, values: &[(&str, String)]) -> String {
-        let pack: serde_json::Value = serde_json::from_str(if self.english {
-            include_str!("../locales/help.en.json")
+        let source_key = match key {
+            "prefix" => "prefix_badge",
+            "settings" => "settings_btn",
+            "hide" => "hide_btn",
+            "unhide" => "unhide_btn",
+            "back" => "screen_back",
+            "close" => "screen_close",
+            "library" => "help_lib",
+            _ => key,
+        };
+        let module = if matches!(key, "back" | "close") {
+            "$inline"
         } else {
-            include_str!("../locales/help.ru.json")
-        })
-        .expect("help locale");
-        let source = pack[key].as_str().unwrap_or(key);
-        let map = values.iter().map(|(k, v)| (*k, v.clone())).collect();
-        crate::info::substitute(source, &map).unwrap_or_else(|_| source.into())
+            "ataraxia_info"
+        };
+        let positional = values.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>();
+        crate::original::message(self.english, module, source_key, &positional, &[])
     }
     fn modules(&self, count: usize) -> String {
         crate::update_ui::Ui {
@@ -391,7 +396,7 @@ impl Ui {
         if self.premium {
             crate::update_ui::PREMIUM_LOGO.into()
         } else {
-            "<b>atarustia</b>".into()
+            "<b>ataraxia</b>".into()
         }
     }
 }
@@ -655,7 +660,7 @@ fn render_inner(
     );
     let hidden = catalog.modules.iter().filter(|m| m.hidden).count();
     let mut plain = format!(
-        "<b>atarustia</b> · {} · {}",
+        "<b>ataraxia</b> · {} · {}",
         ui.modules(catalog.modules.len()),
         escape(&ui.text("prefix", &[("prefix", prefix.into())]))
     );
@@ -787,11 +792,10 @@ pub fn resolve<'a>(
     prefix: &str,
     aliases: &HashMap<String, String>,
 ) -> Option<(&'a Module, bool)> {
-    if let Some(module) = catalog
-        .modules
-        .iter()
-        .find(|m| m.name.eq_ignore_ascii_case(query))
-    {
+    if let Some(module) = catalog.modules.iter().find(|m| {
+        m.name
+            .eq_ignore_ascii_case(crate::original::canonical_module(query))
+    }) {
         return Some((module, true));
     }
     let query_cmd = query.strip_prefix(prefix).unwrap_or(query).to_lowercase();
@@ -862,7 +866,7 @@ fn card(
         .iter()
         .any(|s| s.eq_ignore_ascii_case(query))
     {
-        let text = escape(&ui.text("library", &[("name", query.into())]));
+        let text = ui.text("library", &[("name", escape(query))]);
         return Ok(Screen {
             text: text.clone(),
             pages: vec![text],
@@ -943,19 +947,20 @@ fn card(
         .collect::<Vec<_>>();
     let inline_count = module.commands.iter().filter(|c| c.inline).count();
     let guest_count = module.commands.iter().filter(|c| c.guest).count();
+    let page_size = if module.core {
+        (commands.len() + inline_count + guest_count).max(1)
+    } else {
+        COMMAND_PAGE_SIZE
+    };
     let pages = (commands.len() + inline_count + guest_count)
-        .div_ceil(COMMAND_PAGE_SIZE)
+        .div_ceil(page_size)
         .max(1);
     let page = state.command_page.min(pages - 1);
     let mut rich = vec![];
     let mut plain = vec![];
-    for cmd in commands
-        .iter()
-        .skip(page * COMMAND_PAGE_SIZE)
-        .take(COMMAND_PAGE_SIZE)
-    {
+    for cmd in commands.iter().skip(page * page_size).take(page_size) {
         let full = format!("{prefix}{}", cmd.name);
-        let aliases = aliases
+        let mut aliases = aliases
             .keys()
             .filter_map(|alias| {
                 crate::dispatcher::resolve(alias, "", aliases)
@@ -965,6 +970,12 @@ fn card(
             })
             .take(5)
             .collect::<Vec<_>>();
+        for (alias, command) in [("cfg", "config"), ("fcfg", "fconfig"), ("eval", "e")] {
+            let label = format!("<code>{}</code>", escape(&format!("{prefix}{alias}")));
+            if cmd.name == command && !aliases.contains(&label) {
+                aliases.push(label);
+            }
+        }
         let (usage, description) = parse_doc(&cmd.description);
         let line = format!(
             "<code>{}</code>{} — {}{}",
@@ -1026,13 +1037,13 @@ fn card(
         let lines = handlers
             .iter()
             .skip(
-                (page * COMMAND_PAGE_SIZE)
+                (page * page_size)
                     .saturating_sub(commands.len() + if guest { inline_count } else { 0 }),
             )
             .take(
-                ((page + 1) * COMMAND_PAGE_SIZE)
+                ((page + 1) * page_size)
                     .saturating_sub(commands.len() + if guest { inline_count } else { 0 })
-                    .min(COMMAND_PAGE_SIZE),
+                    .min(page_size),
             )
             .map(|cmd| {
                 format!(
@@ -1121,7 +1132,13 @@ pub async fn build(
     if !owner {
         state.force = false;
     }
-    let aliases = serde_json::from_value(ctx.db.get("Settings", "aliases")).unwrap_or_default();
+    let mut aliases: HashMap<String, String> =
+        serde_json::from_value(ctx.db.get("Settings", "aliases")).unwrap_or_default();
+    for (alias, command) in [("cfg", "config"), ("fcfg", "fconfig"), ("eval", "e")] {
+        aliases
+            .entry(alias.into())
+            .or_insert_with(|| command.into());
+    }
     let bot = ctx
         .bot
         .read()
@@ -1166,8 +1183,14 @@ pub fn toggle_hidden(ctx: &Context, module: &str) -> Result<bool> {
             .or_insert_with(|| serde_json::json!([]))
             .as_array_mut()
             .context("invalid hidden list")?;
-        if array.iter().any(|v| v.as_str() == Some(module)) {
-            array.retain(|v| v.as_str() != Some(module));
+        if array.iter().any(|v| {
+            v.as_str()
+                .is_some_and(|n| crate::original::canonical_module(n) == module)
+        }) {
+            array.retain(|v| {
+                !v.as_str()
+                    .is_some_and(|n| crate::original::canonical_module(n) == module)
+            });
             Ok(false)
         } else {
             array.push(module.into());

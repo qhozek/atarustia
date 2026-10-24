@@ -190,7 +190,8 @@ fn premium_logo_and_emojis_are_native_entities_with_plain_alt_fallback() {
     let screen = ui.restarting();
     let premium = content(update_ui::user_body(&screen, true).unwrap());
     let plain = content(update_ui::user_body(&screen, false).unwrap());
-    assert!(plain.message.contains("atarustia"));
+    assert!(plain.message.contains("ataraxia"));
+    assert!(!plain.message.contains("atarustia"));
     assert!(!premium.message.contains("atarustia-emoji:"));
     let entities = premium.entities.unwrap();
     let ids = entities

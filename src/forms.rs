@@ -10,6 +10,18 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
+    Configure {
+        state: crate::config_ui::State,
+        operation: crate::config_ui::Operation,
+    },
+    Settings {
+        key: Option<String>,
+        value: bool,
+    },
+    SettingsMaintenance {
+        restart: bool,
+        confirmed: bool,
+    },
     Page {
         page: usize,
     },
@@ -107,6 +119,10 @@ pub struct Screen {
     pub link_preview: bool,
     #[serde(skip)]
     pub help_state: Option<crate::help::State>,
+    #[serde(skip)]
+    pub config_reply: Option<crate::config_ui::State>,
+    #[serde(skip)]
+    pub config_fallback: Option<Vec<Vec<Key>>>,
 }
 impl Default for Screen {
     fn default() -> Self {
@@ -125,6 +141,8 @@ impl Default for Screen {
             close_button: true,
             link_preview: true,
             help_state: None,
+            config_reply: None,
+            config_fallback: None,
         }
     }
 }
@@ -142,6 +160,8 @@ struct Unit {
     help_return: Option<crate::help::State>,
     module: Option<String>,
     inline_command: Option<String>,
+    inline_id: Option<String>,
+    destination: Option<(i64, i32)>,
 }
 #[derive(Clone)]
 pub struct Gate {
@@ -388,6 +408,8 @@ impl Forms {
                 help_return: None,
                 module: None,
                 inline_command: None,
+                inline_id: None,
+                destination: None,
             },
         );
         let message = match self.render(&id, 0) {
@@ -405,6 +427,67 @@ impl Forms {
     }
     pub fn gate(&self, id: &str) -> Option<Gate> {
         self.units.get(id).and_then(|u| u.gate.clone())
+    }
+    pub fn bind_message(&mut self, id: &str, chat: i64, message: i32) {
+        if let Some(unit) = self.units.get_mut(id) {
+            unit.destination = Some((chat, message));
+        }
+    }
+    pub fn bind_inline(&mut self, id: &str, inline_id: String) {
+        if let Some(unit) = self.units.get_mut(id) {
+            unit.inline_id = Some(inline_id);
+        }
+    }
+    pub fn inline_id(&self, id: &str) -> Option<String> {
+        self.units.get(id).and_then(|u| u.inline_id.clone())
+    }
+    pub fn destination(&self, id: &str) -> Option<(i64, i32)> {
+        self.units.get(id).and_then(|u| u.destination)
+    }
+    pub fn configuration(&self, id: &str) -> bool {
+        self.units.get(id).is_some_and(|u| {
+            u.screen.config_fallback.is_some()
+                || u.screen.buttons.iter().flatten().any(|k| {
+                    matches!(
+                        k.action,
+                        Some(Action::Settings { .. } | Action::SettingsMaintenance { .. })
+                    )
+                })
+        })
+    }
+    pub fn config_reply(
+        &mut self,
+        chat: i64,
+        message: i32,
+    ) -> Option<(String, crate::config_ui::State)> {
+        self.clean();
+        self.units.iter().find_map(|(id, unit)| {
+            (unit.destination == Some((chat, message)))
+                .then(|| unit.screen.config_reply.clone().map(|s| (id.clone(), s)))
+                .flatten()
+        })
+    }
+    pub fn config_input(
+        &mut self,
+        query: &str,
+    ) -> Option<(
+        String,
+        crate::config_ui::State,
+        crate::config_ui::Input,
+        String,
+    )> {
+        self.clean();
+        let (token, value) = query.split_once(' ').unwrap_or((query, ""));
+        let (id, action) = self.callbacks.get(token)?;
+        if let Action::Configure {
+            state,
+            operation: crate::config_ui::Operation::Input { mode },
+        } = action
+        {
+            Some((id.clone(), state.clone(), *mode, value.trim().into()))
+        } else {
+            None
+        }
     }
     pub fn bind_module(&mut self, id: &str, module: &str) -> Result<()> {
         self.units.get_mut(id).context("form expired")?.module = Some(module.into());
@@ -505,7 +588,7 @@ impl Forms {
         let body = self.render(id, 0)?;
         crate::media::inline_result(
             id,
-            "atarustia",
+            "ataraxia",
             body,
             self.media(id).as_ref(),
             self.rich_source(id).as_deref(),
@@ -570,13 +653,34 @@ impl Forms {
             unit.screen.button_appearance.clone()
         };
         if unit.rich_failed {
-            rows.extend(unit.screen.rich_buttons.chunks(2).map(|r| r.to_vec()));
-            let rich_styles = if unit.screen.rich_button_appearance.is_empty() {
-                vec![crate::markup::Appearance::default(); unit.screen.rich_buttons.len()]
+            if let Some(fallback) = &unit.screen.config_fallback {
+                let fallback_styles: Vec<_> = fallback
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|key| {
+                                unit.screen
+                                    .rich_buttons
+                                    .iter()
+                                    .position(|k| k.text == key.text)
+                                    .and_then(|i| unit.screen.rich_button_appearance.get(i))
+                                    .cloned()
+                                    .unwrap_or_default()
+                            })
+                            .collect()
+                    })
+                    .collect();
+                rows = fallback.iter().cloned().chain(rows).collect();
+                appearances = fallback_styles.into_iter().chain(appearances).collect();
             } else {
-                unit.screen.rich_button_appearance.clone()
-            };
-            appearances.extend(rich_styles.chunks(2).map(|r| r.to_vec()));
+                rows.extend(unit.screen.rich_buttons.chunks(2).map(|r| r.to_vec()));
+                let rich_styles = if unit.screen.rich_button_appearance.is_empty() {
+                    vec![crate::markup::Appearance::default(); unit.screen.rich_buttons.len()]
+                } else {
+                    unit.screen.rich_button_appearance.clone()
+                };
+                appearances.extend(rich_styles.chunks(2).map(|r| r.to_vec()));
+            }
             unit.rich_render = None;
         } else if let Some(source) = &unit.screen.rich_html {
             let mut rich = source.clone();
@@ -598,6 +702,9 @@ impl Forms {
                             | Action::ConfigReset { .. }
                             | Action::ConfigSet { .. }
                             | Action::ConfigInput { .. }
+                            | Action::Configure { .. }
+                            | Action::Settings { .. }
+                            | Action::SettingsMaintenance { .. }
                     ) {
                         let token = format!("f:{}", &crate::web::random_token()[..32]);
                         self.callbacks
@@ -696,6 +803,15 @@ impl Forms {
                                 }
                                 .into(),
                             });
+                            continue;
+                        }
+                        Action::Configure { ref operation, .. }
+                            if matches!(operation, crate::config_ui::Operation::Input { .. }) =>
+                        {
+                            let token = format!("ci:{}", &crate::web::random_token()[..24]);
+                            self.callbacks.insert(token.clone(), (id.into(), action));
+                            unit.tokens.push(token.clone());
+                            buttons.push(Button::switch(key.text, format!("{token} ")));
                             continue;
                         }
                         _ => {}

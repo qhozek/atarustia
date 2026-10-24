@@ -177,6 +177,197 @@ async fn updater_notification_setting_uses_core_config_and_reset() {
     );
     f.connection.close().await.unwrap();
 }
+#[tokio::test]
+async fn original_fconfig_reply_chains_partial_success_and_hidden_values() {
+    use atarustia::config_ui;
+    let f = Fixture::new();
+    let output =
+        config_ui::fast_config(&f.ctx, "updater update_notifications False", None).unwrap();
+    assert!(output.contains("сохранен"));
+    assert!(
+        !atarustia::update_ui::Config::load(&f.ctx.db)
+            .unwrap()
+            .update_notifications
+    );
+    config_ui::fast_config(&f.ctx, "Updater update_notifications", Some("True")).unwrap();
+    assert!(
+        atarustia::update_ui::Config::load(&f.ctx.db)
+            .unwrap()
+            .update_notifications
+    );
+    let output = config_ui::fast_config(
+        &f.ctx,
+        "ataraxiaInfo quote_media False && rich_mode not_a_boolean",
+        None,
+    )
+    .unwrap();
+    assert!(output.contains("quote_media"));
+    assert!(output.contains("Ошибка"));
+    assert!(
+        !atarustia::info::Config::load(&f.ctx.db)
+            .unwrap()
+            .quote_media
+    );
+    assert!(!atarustia::info::Config::load(&f.ctx.db).unwrap().rich_mode);
+    let output =
+        config_ui::fast_config(&f.ctx, "ataraxiaInfo custom_message", Some("<b>{me}</b>")).unwrap();
+    assert!(output.contains("&lt;b&gt;"));
+    let output = config_ui::fast_config(&f.ctx, "ataraxiaInfo unknown x", None).unwrap();
+    assert_eq!(output, config_ui::ui(&f.ctx).text("no_option"));
+    let output = config_ui::fast_config(&f.ctx, "", None).unwrap();
+    assert_eq!(output, config_ui::ui(&f.ctx).text("args"));
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn config_reset_navigation_storage_and_manifest_metadata_are_bound() {
+    use atarustia::config_ui::{self, Operation, State};
+    let f = Fixture::new();
+    let mut p: Package =
+        serde_json::from_str(include_str!("../examples/hello.module.json")).unwrap();
+    p.manifest
+        .config_docs
+        .insert("greeting".into(), "Description".into());
+    p.manifest
+        .config_folders
+        .insert("greeting".into(), "Messages".into());
+    let before = p.revision();
+    p.manifest
+        .config_docs
+        .insert("greeting".into(), "Changed description".into());
+    assert_ne!(p.revision(), before);
+    let h = f.ctx.modules.lock().unwrap().stage(p).unwrap();
+    f.ctx.modules.lock().unwrap().approve(&h).unwrap();
+    let s = atarustia::screens::config(&f.ctx, "hello greeting").unwrap();
+    assert!(s.text.contains("Changed description"));
+    let (unit, _) = f.ctx.forms.lock().unwrap().create(s, 1, vec![]).unwrap();
+    f.ctx.forms.lock().unwrap().bind_message(&unit, 1, 42);
+    assert!(f.ctx.forms.lock().unwrap().config_reply(2, 42).is_none());
+    assert!(f.ctx.forms.lock().unwrap().config_reply(1, 42).is_some());
+    let state = State {
+        module: Some("hello".into()),
+        parameter: Some("greeting".into()),
+        ..Default::default()
+    };
+    config_ui::apply(
+        &f.ctx,
+        &state,
+        &Operation::Set {
+            value: json!("new"),
+        },
+        None,
+    )
+    .unwrap();
+    config_ui::apply(&f.ctx, &state, &Operation::ResetAll, None).unwrap();
+    assert_eq!(
+        f.ctx.db.get("hello", "__config__")["greeting"],
+        json!("Hello")
+    );
+    f.ctx.forms.lock().unwrap().remove(&unit);
+    assert!(f.ctx.forms.lock().unwrap().config_reply(1, 42).is_none());
+    f.connection.close().await.unwrap();
+}
+#[tokio::test]
+async fn builtin_catalogue_has_original_fourteen_modules_and_command_ownership() {
+    let f = Fixture::new();
+    let catalogue = atarustia::help::catalog(&f.ctx);
+    let actual: std::collections::BTreeSet<_> = catalogue
+        .modules
+        .iter()
+        .filter(|m| m.core)
+        .map(|m| m.name.as_str())
+        .collect();
+    let expected="APILimiter ataraxiaBackup ataraxiaConfig ataraxiaInfo ataraxiaSecurity ataraxiaWeb Executor InlineStuff Loader Quickstart Settings Tester Translations Updater".split_whitespace().collect();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        catalogue
+            .modules
+            .iter()
+            .map(|m| m.commands.len())
+            .sum::<usize>(),
+        70
+    );
+    for (name, count) in [
+        ("APILimiter", 2),
+        ("ataraxiaBackup", 7),
+        ("ataraxiaConfig", 2),
+        ("ataraxiaInfo", 3),
+        ("ataraxiaSecurity", 15),
+        ("ataraxiaWeb", 2),
+        ("Executor", 6),
+        ("InlineStuff", 2),
+        ("Loader", 5),
+        ("Quickstart", 0),
+        ("Settings", 17),
+        ("Tester", 4),
+        ("Translations", 2),
+        ("Updater", 3),
+    ] {
+        assert_eq!(
+            catalogue
+                .modules
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap()
+                .commands
+                .len(),
+            count,
+            "{name}"
+        );
+    }
+    for (command, module) in [
+        ("ataraxia", "Settings"),
+        ("suspend", "Tester"),
+        ("ch_ataraxia_bot", "InlineStuff"),
+        ("ch_bot_token", "InlineStuff"),
+        ("querysec", "ataraxiaSecurity"),
+    ] {
+        assert!(
+            catalogue
+                .modules
+                .iter()
+                .find(|m| m.name == module)
+                .unwrap()
+                .commands
+                .iter()
+                .any(|c| c.name == command)
+        );
+    }
+    for m in &catalogue.modules {
+        assert!(!m.name.contains("atarustia"));
+        assert!(!m.description.contains("atarustia"));
+        assert_ne!(m.description, "_cls_doc");
+        assert!(m.metadata.version.is_none());
+    }
+    f.ctx
+        .db
+        .set("atarustia.help", "hidden", json!(["atarustiaConfig"]))
+        .unwrap();
+    assert!(atarustia::preferences::hidden(&f.ctx.db, "ataraxiaConfig"));
+    assert!(!atarustia::help::toggle_hidden(&f.ctx, "ataraxiaConfig").unwrap());
+    assert!(!atarustia::preferences::hidden(&f.ctx.db, "ataraxiaConfig"));
+    let help = atarustia::help::build(
+        &f.ctx,
+        1,
+        None,
+        &atarustia::help::State {
+            module: Some("Settings".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(help.text.contains(".ataraxia"));
+    assert!(help.text.contains(".setprefix"));
+    assert!(!help.text.contains("atarustiaConfig"));
+    assert!(
+        !help
+            .buttons
+            .iter()
+            .flatten()
+            .any(|k| k.text.contains(" / "))
+    );
+    f.connection.close().await.unwrap();
+}
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();

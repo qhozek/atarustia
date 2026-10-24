@@ -1,29 +1,14 @@
-//! Shared UI construction: Telegram transport is kept outside screen rendering.
-use crate::{
-    commands::Context,
-    forms::{Action, Key, Screen},
-    output::escape,
-};
+//! Shared screen/storage adapters. The configurator itself lives in config_ui.
+use crate::{commands::Context, forms::Screen};
 use anyhow::{Context as _, Result};
 use serde_json::Value;
-fn button(text: impl Into<String>, action: Action) -> Key {
-    Key {
-        text: text.into(),
-        action: Some(action),
-        url: None,
-    }
-}
 pub fn help(ctx: &Context, module: Option<&str>) -> Result<Screen> {
     crate::help::render(
         &crate::help::catalog(ctx),
         &crate::help::State::parse(module.unwrap_or(""))?,
         crate::help::Ui {
-            english: ctx.db.language().split_whitespace().next() == Some("en"),
-            premium: ctx
-                .db
-                .get("RustRuntime", "premium")
-                .as_bool()
-                .unwrap_or(false),
+            english: ctx.db.language().starts_with("en"),
+            premium: crate::config_ui::ui(ctx).premium,
         },
         &ctx.db.prefix(),
         ctx.username.as_deref().unwrap_or("bot"),
@@ -33,155 +18,33 @@ pub fn help(ctx: &Context, module: Option<&str>) -> Result<Screen> {
         &crate::info::Config::load(&ctx.db)?.help_banner_url,
     )
 }
-pub fn config(ctx: &Context, module: &str) -> Result<Screen> {
-    if module.is_empty() {
-        let mut rows = vec![
-            vec![button(
-                crate::update_ui::MODULE,
-                Action::ConfigOpen {
-                    module: crate::update_ui::MODULE.into(),
-                },
-            )],
-            vec![button(
-                crate::info::MODULE,
-                Action::ConfigOpen {
-                    module: crate::info::MODULE.into(),
-                },
-            )],
-        ];
-        for m in ctx.modules.lock().unwrap().list() {
-            rows.push(vec![button(
-                m.name.clone(),
-                Action::ConfigOpen { module: m.name },
-            )]);
-        }
-        return Ok(Screen {
-            text: format!(
-                "{}\nPrefix: {}\nLanguage: {}",
-                ctx.tr("config", &[]),
-                ctx.db.prefix(),
-                ctx.db.language()
-            ),
-            buttons: rows.into_iter().take(30).collect(),
+pub fn config(ctx: &Context, args: &str) -> Result<Screen> {
+    let args = crate::config_ui::arguments(args);
+    crate::config_ui::build(
+        ctx,
+        &crate::config_ui::State {
+            module: args.first().cloned(),
+            parameter: args.get(1).cloned(),
             ..Default::default()
-        });
-    }
-    let (config, _, validators) = config_data(ctx, module)?;
-    let map = config
-        .as_object()
-        .context("module has no object configuration")?;
-    let mut text = format!("<b>{}</b>\n", escape(module));
-    let mut rows = vec![];
-    for (key, value) in map.iter().take(25) {
-        let hidden = validators.get(key).is_some_and(|v| v.hidden())
-            || key.to_lowercase().contains("token")
-            || key.to_lowercase().contains("secret")
-            || key.to_lowercase().contains("password");
-        let shown = if hidden {
-            "••••••".into()
-        } else {
-            serde_json::to_string(value)?
-        };
-        text.push_str(&format!(
-            "\n<b>{}</b>: <code>{}</code>",
-            escape(key),
-            escape(&shown.chars().take(200).collect::<String>())
-        ));
-        let mut row = vec![];
-        match value {
-            Value::Bool(v) => row.push(button(
-                format!("{key}: {v}"),
-                Action::ConfigToggle {
-                    module: module.into(),
-                    key: key.clone(),
-                },
-            )),
-            Value::Number(n) if n.is_i64() => {
-                row.push(button(
-                    format!("− {key}"),
-                    Action::ConfigStep {
-                        module: module.into(),
-                        key: key.clone(),
-                        step: -1,
-                    },
-                ));
-                row.push(button(
-                    format!("+ {key}"),
-                    Action::ConfigStep {
-                        module: module.into(),
-                        key: key.clone(),
-                        step: 1,
-                    },
-                ));
-            }
-            _ => {}
-        }
-        if let Some(crate::validators::Validator::Choice { values }) = validators.get(key) {
-            for choice in values.iter().take(4) {
-                row.push(button(
-                    serde_json::to_string(choice)?
-                        .chars()
-                        .take(32)
-                        .collect::<String>(),
-                    Action::ConfigSet {
-                        module: module.into(),
-                        key: key.clone(),
-                        value: choice.clone(),
-                    },
-                ));
-            }
-        }
-        if row.len() < 6 {
-            row.push(button(
-                format!("✎ {key}"),
-                Action::ConfigInput {
-                    module: module.into(),
-                    key: key.clone(),
-                },
-            ));
-        }
-        row.push(button(
-            format!("↺ {key}"),
-            Action::ConfigReset {
-                module: module.into(),
-                key: key.clone(),
-            },
-        ));
-        rows.push(row);
-    }
-    text.push_str(&format!(
-        "\n\n<code>{}fconfig {} key &lt;JSON&gt;</code>",
-        escape(&ctx.db.prefix()),
-        escape(module)
-    ));
-    if module == crate::info::MODULE {
-        text.push_str(&format!(
-            "\n\nPlaceholders: <code>{}</code>",
-            crate::info::PLACEHOLDERS
-                .iter()
-                .map(|s| format!("{{{s}}}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ));
-    }
-    rows.push(vec![button(
-        ctx.tr("back", &[]),
-        Action::ConfigOpen {
-            module: String::new(),
         },
-    )]);
-    Ok(Screen {
-        text,
-        html: true,
-        buttons: rows,
-        ..Default::default()
-    })
+        None,
+    )
+}
+pub fn config_for_unit(ctx: &Context, module: &str, unit: &str) -> Result<Screen> {
+    crate::config_ui::build(
+        ctx,
+        &crate::config_ui::State {
+            module: (!module.is_empty()).then(|| module.into()),
+            ..Default::default()
+        },
+        Some(unit),
+    )
 }
 pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Result<()> {
     let (mut config, _, validators) = config_data(ctx, module)?;
     let old = config.clone();
-    let value = if let Some(validator) = validators.get(key) {
-        validator.validate(value)?
+    let value = if let Some(v) = validators.get(key) {
+        v.validate(crate::config_ui::config_value(value, Some(v)))?
     } else {
         value
     };
@@ -195,6 +58,9 @@ pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Resul
     }
     if module == crate::update_ui::MODULE {
         let _: crate::update_ui::Config = serde_json::from_value(config.clone())?;
+    }
+    if module == "Tester" {
+        serde_json::from_value::<crate::presentation::PingConfig>(config.clone())?.validate()?;
     }
     let notify = old != config && ctx.modules.lock().unwrap().package(module).is_some();
     ctx.db.transaction(|data| {
@@ -218,16 +84,6 @@ pub fn set_config(ctx: &Context, module: &str, key: &str, value: Value) -> Resul
         }
         Ok(())
     })
-}
-pub fn config_for_unit(ctx: &Context, module: &str, unit: &str) -> Result<Screen> {
-    let mut screen = config(ctx, module)?;
-    if let Some(state) = ctx.forms.lock().unwrap().help_return(unit) {
-        screen.buttons.push(vec![button(
-            format!("‹ {}", ctx.tr("help", &[])),
-            Action::HelpNavigate { state },
-        )]);
-    }
-    Ok(screen)
 }
 pub fn apply_config(
     ctx: &Context,
@@ -253,25 +109,71 @@ pub fn apply_config(
     };
     set_config(ctx, module, key, value)
 }
-
 type ConfigData = (
     Value,
     Value,
     std::collections::BTreeMap<String, crate::validators::Validator>,
 );
 pub fn config_data(ctx: &Context, module: &str) -> Result<ConfigData> {
+    use crate::validators::Validator;
     if module == crate::update_ui::MODULE {
         return Ok((
             serde_json::to_value(crate::update_ui::Config::load(&ctx.db)?)?,
             serde_json::to_value(crate::update_ui::Config::default())?,
-            Default::default(),
+            std::collections::BTreeMap::from([("update_notifications".into(), Validator::Boolean)]),
         ));
     }
     if module == crate::info::MODULE {
         return Ok((
             serde_json::to_value(crate::info::Config::load(&ctx.db)?)?,
             serde_json::to_value(crate::info::Config::default())?,
-            Default::default(),
+            std::collections::BTreeMap::from([
+                ("rich_mode".into(), Validator::Boolean),
+                ("quote_media".into(), Validator::Boolean),
+                ("invert_media".into(), Validator::Boolean),
+            ]),
+        ));
+    }
+    if module == "Settings" {
+        let defaults = serde_json::json!({"allow_nonstandart_prefixes":false,"alias_emoji":"<tg-emoji emoji-id=4974259868996207180>▪️</tg-emoji>"});
+        let mut values = defaults.clone();
+        if let Some(saved) = ctx.db.get("Settings", "__config__").as_object() {
+            for (k, v) in saved {
+                values[k] = v.clone();
+            }
+        }
+        return Ok((
+            values,
+            defaults,
+            std::collections::BTreeMap::from([(
+                "allow_nonstandart_prefixes".into(),
+                Validator::Boolean,
+            )]),
+        ));
+    }
+    if module == "Tester" {
+        return Ok((
+            serde_json::to_value(crate::presentation::PingConfig::load(&ctx.db)?)?,
+            serde_json::to_value(crate::presentation::PingConfig::default())?,
+            std::collections::BTreeMap::from([
+                ("rich_mode".into(), Validator::Boolean),
+                ("quote_media".into(), Validator::Boolean),
+                ("invert_media".into(), Validator::Boolean),
+                (
+                    "custom_message".into(),
+                    Validator::String {
+                        min_len: None,
+                        max_len: Some(16384),
+                    },
+                ),
+                (
+                    "ping_emoji".into(),
+                    Validator::String {
+                        min_len: None,
+                        max_len: Some(64),
+                    },
+                ),
+            ]),
         ));
     }
     let package = ctx
@@ -282,14 +184,11 @@ pub fn config_data(ctx: &Context, module: &str) -> Result<ConfigData> {
         .into_iter()
         .find(|p| p.manifest.name == module)
         .context("unknown module")?;
-    let saved = ctx.db.get(module, "__config__");
-    Ok((
-        if saved.is_null() {
-            package.manifest.config.clone()
-        } else {
-            saved
-        },
-        package.manifest.config,
-        package.manifest.validators,
-    ))
+    let mut values = package.manifest.config.clone();
+    if let Some(saved) = ctx.db.get(module, "__config__").as_object() {
+        for (k, v) in saved {
+            values[k] = v.clone();
+        }
+    }
+    Ok((values, package.manifest.config, package.manifest.validators))
 }

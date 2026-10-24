@@ -68,6 +68,10 @@ Markers {{atarustia:tap:0}} связываются с opaque callbacks. Fallback
 Module screen может вызвать только свой handler; действия config ядра ему недоступны.
 
 Validators: boolean/integer/float/string/choice/multi_choice/series/link/telegram_id/hidden/union/none.
+Необязательные `config_docs: {parameter: description}` и `config_folders: {parameter: folder}`
+показывают описания и группируют параметры в оригинальном конфигураторе. Метаданные входят
+в ревизию пакета; пустые поля не меняют сериализацию старых пакетов. Для Python-модулей
+это не слой совместимости с `ConfigValue` — они по-прежнему не исполняются.
 Defaults и ввод проверяются одинаково. Limits: 100000 ops, depth 64, call depth 32,
 128 KiB string, 4096 array items, 1024 map items, 256 KiB state, 512 forms, 50 pages, 90 buttons.
 Loop interval 1..86400 s. Это ограничения ресурсов, не формально проверенная sandbox.

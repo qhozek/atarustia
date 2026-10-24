@@ -39,7 +39,7 @@ pub const BUILTINS: &[(&str, &str)] = &[
         "в ответ на backup JSON — подготовить модули к одобрению",
     ),
     ("clearmodules", "confirm — удалить все внешние модули"),
-    ("settings", "настройки аккаунта"),
+    ("settings", "меню NoNick, Grep, InlineLogs и обслуживания"),
     (
         "help",
         "[module|command] [-f|-c|-l] — каталог и карточки модулей",
@@ -52,8 +52,11 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ("aliases", "список алиасов"),
     ("addalias", "<alias> <command> — добавить алиас"),
     ("delalias", "<alias> — удалить алиас"),
-    ("config", "[module] — конфигурация"),
-    ("fconfig", "<module> <key> <json> — изменить параметр"),
+    ("config", "[модуль] [параметр] — конфигурация"),
+    (
+        "fconfig",
+        "<модуль> <параметр> <значение> — изменить конфигурацию",
+    ),
     ("dlm", "<https-url> — скачать пакет для проверки"),
     ("lm", "в ответ на JSON-пакет — подготовить модуль"),
     ("ulm", "<module> — удалить модуль"),
@@ -148,6 +151,33 @@ impl Context {
     pub fn tr(&self, key: &str, values: &[(&str, String)]) -> String {
         crate::i18n::text(&self.db, key, values)
     }
+    pub fn original(&self, module: &str, key: &str, values: &[String]) -> String {
+        crate::original::message(
+            self.db.language().starts_with("en"),
+            module,
+            key,
+            values,
+            &[],
+        )
+    }
+    pub(crate) async fn answer_html(&self, message: &Message, text: &str) -> Result<()> {
+        let body = crate::update_ui::user_body(
+            &crate::forms::Screen {
+                text: text.into(),
+                ..Default::default()
+            },
+            self.db
+                .get("RustRuntime", "premium")
+                .as_bool()
+                .unwrap_or(false),
+        )?;
+        if message.outgoing() {
+            message.edit(body).await?;
+        } else {
+            message.reply(body).await?;
+        }
+        Ok(())
+    }
     pub fn permission(&self, name: &str) -> Permission {
         self.permission_with_default(name, Permission::Owner)
     }
@@ -163,39 +193,26 @@ impl Context {
         security::effective(&self.db, permission)
     }
     pub fn help(&self) -> String {
-        let prefix = self.db.prefix();
-        let mut text = self.tr(
-            "help_title",
-            &[("version", env!("CARGO_PKG_VERSION").into())],
-        ) + "\n\n";
-        for (name, doc) in BUILTINS
-            .iter()
-            .chain(crate::security_commands::COMMANDS)
-            .chain(crate::preferences::COMMANDS)
-        {
-            text.push_str(&format!("{prefix}{name} — {doc}\n"));
-        }
-        for m in self.modules.lock().expect("modules lock").list() {
-            if crate::preferences::hidden(&self.db, &m.name) {
-                continue;
-            }
-            text.push_str(&format!("\n[{}] {}\n", m.name, m.description));
-            for c in m.commands {
-                text.push_str(&format!("{prefix}{} — {}\n", c.name, c.description));
-            }
-        }
-        for module in self.native.list() {
-            text.push_str(&format!("\n[{}] {}\n", module.name(), module.description()));
-            for command in module.commands() {
-                text.push_str(&format!(
-                    "{prefix}{} — {}\n",
-                    command.name, command.description
-                ));
-            }
-        }
-        text
+        crate::screens::help(self, None)
+            .map(|s| s.text)
+            .unwrap_or_else(|_| self.original("ataraxia_info", "nothing", &[]))
     }
     pub async fn handle(self: &Arc<Self>, message: Message, edited: bool) -> Result<()> {
+        if !edited
+            && message.outgoing()
+            && message
+                .text()
+                .contains("This message will be deleted automatically")
+        {
+            let bot = self.bot.read().await.as_ref().map(|b| b.bot.id);
+            if bot.is_some() && message.via_bot_id() == bot {
+                message.delete().await?;
+                return Ok(());
+            }
+        }
+        if !edited && crate::config_ui::handle_reply(self, &message).await? {
+            return Ok(());
+        }
         // Channel posts/edits do not authenticate the editor. Never trust `outgoing` there.
         if message.peer_id().kind() == grammers_session::types::PeerKind::Channel {
             if message
@@ -259,7 +276,16 @@ impl Context {
         } else {
             (name, args)
         };
-        let (args, grep) = crate::dispatcher::grep(&args);
+        let (args, grep) = if self
+            .db
+            .get("atarustia.main", "grep")
+            .as_bool()
+            .unwrap_or(false)
+        {
+            crate::dispatcher::grep(&args)
+        } else {
+            (args, None)
+        };
         if name != "suspend"
             && self
                 .db
@@ -437,17 +463,34 @@ impl Context {
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(command=%message.id(),"command failed");
-                telegram::answer(
-                    &message,
-                    &self.tr(
-                        "error",
-                        &[(
-                            "error",
-                            crate::output::error_message(&e.to_string(), &self.secrets),
-                        )],
-                    ),
-                )
-                .await?;
+                let mut text = format!(
+                    "<tg-emoji emoji-id=5877477244938489129>🚫</tg-emoji><b> Call</b> <code>{}</code><b> failed!</b>",
+                    crate::output::escape(message.text())
+                );
+                if self
+                    .db
+                    .get("atarustia.main", "inlinelogs")
+                    .as_bool()
+                    .unwrap_or(true)
+                {
+                    text.push_str(&format!(
+                        "\n\n<b>🧾 Logs:</b>\n<pre><code class=\"language-logs\">{}</code></pre>",
+                        crate::output::escape(
+                            &self.logs.redact(crate::output::error_message(
+                                &e.to_string(),
+                                &self.secrets
+                            ))
+                        )
+                    ));
+                }
+                let input = grammers_client::message::InputMessage::new()
+                    .html(text)
+                    .link_preview(false);
+                if message.outgoing() {
+                    message.edit(input).await?;
+                } else {
+                    message.reply(input).await?;
+                }
             }
         }
         Ok(())
@@ -468,13 +511,29 @@ impl Context {
             crate::info::send(self, m).await?;
             return Ok(None);
         }
+        if name == "ping" {
+            crate::presentation::ping(self, m).await?;
+            return Ok(None);
+        }
         if matches!(name, "config" | "settings") {
-            let screen = crate::screens::config(self, args);
-            if let (Ok(screen), Some(bot)) = (screen, self.bot.read().await.clone())
-                && bot.form(self, m, screen).await.is_ok()
-            {
-                return Ok(None);
+            let screen = if name == "settings" {
+                crate::config_ui::settings(self)
+            } else {
+                crate::screens::config(self, args)?
+            };
+            if let Some(bot) = self.bot.read().await.clone() {
+                bot.form(self, m, screen).await?;
+            } else {
+                let input = grammers_client::message::InputMessage::new()
+                    .html(screen.text)
+                    .link_preview(false);
+                if m.outgoing() {
+                    m.edit(input).await?;
+                } else {
+                    m.reply(input).await?;
+                }
             }
+            return Ok(None);
         }
         if name == "tsec"
             || crate::security_commands::COMMANDS
@@ -608,7 +667,8 @@ impl Context {
                     .context("account slot missing")?
                     .bot_token = Some(args.into());
                 config.save(&self.root)?;
-                telegram::answer(m, &self.tr("restarting", &[])).await?;
+                self.answer_html(m, &self.original("inline_stuff", "bot_updated", &[]))
+                    .await?;
                 self.db.set("RustRuntime", "restart", true)?;
                 self.stop.cancel();
                 return Ok(None);
@@ -620,7 +680,7 @@ impl Context {
                 );
                 let _guard = self.maintenance.lock().await;
                 let username = if args.is_empty() {
-                    format!("atarustia_{}_{}_bot", self.owner, rand::random::<u16>())
+                    crate::original::bot_username()
                 } else {
                     args.trim_start_matches('@').into()
                 };
@@ -637,14 +697,17 @@ impl Context {
                     .context("account missing")?
                     .bot_token = Some(token);
                 config.save(&self.root)?;
-                telegram::answer(m, &self.tr("restarting", &[])).await?;
+                self.answer_html(m, &self.original("inline_stuff", "bot_updated", &[]))
+                    .await?;
                 self.db.set("RustRuntime", "restart", true)?;
                 self.stop.cancel();
                 return Ok(None);
             }
             "dllangpack" => {
                 crate::i18n::install(&self.db, args).await?;
-                self.tr("saved", &[])
+                self.answer_html(m, &self.original("translations", "pack_saved", &[]))
+                    .await?;
+                return Ok(None);
             }
             "loops" => {
                 let p: Vec<_> = args.split_whitespace().collect();
@@ -688,7 +751,7 @@ impl Context {
                 telegram::send_file(
                     &self.client,
                     telegram::peer(m).await?,
-                    "atarustia.log",
+                    "ataraxia-logs.txt",
                     self.logs.redact(text).into_bytes(),
                     "Confidential runtime logs",
                 )
@@ -697,7 +760,9 @@ impl Context {
             }
             "clearlogs" => {
                 self.logs.clear();
-                self.tr("logs_cleared", &[])
+                self.answer_html(m, &self.original("test", "logs_cleared", &[]))
+                    .await?;
+                return Ok(None);
             }
             "setup" => {
                 let id = tokio::time::timeout(
@@ -707,8 +772,18 @@ impl Context {
                 .await??;
                 format!("Контент-форум готов: {id}")
             }
-            "ping" => format!("Pong 🦀 · uptime {}s", self.start.elapsed().as_secs()),
-            "source" => self.tr("source", &[]),
+            "source" => {
+                self.answer_html(
+                    m,
+                    &self.original(
+                        "updater",
+                        "source",
+                        &["https://git.break.wtf/xenside/ataraxia".into()],
+                    ),
+                )
+                .await?;
+                return Ok(None);
+            }
             "setprefix" => {
                 let parts: Vec<_> = args.split_whitespace().collect();
                 ensure!(
@@ -716,9 +791,27 @@ impl Context {
                     "usage: setprefix <prefix> [user]"
                 );
                 let prefix = parts[0];
+                let oldprefix = if let Some(target) = parts.get(1) {
+                    let id = crate::security_commands::resolve_user(self, m, Some(target)).await?;
+                    self.db.prefix_for(Some(id), self.owner)
+                } else {
+                    self.db.prefix()
+                };
                 ensure!(
-                    !prefix.is_empty() && prefix.chars().count() <= 8,
-                    "prefix must be 1–8 non-whitespace characters"
+                    prefix != "s"
+                        && (prefix.chars().count() == 1
+                            || self
+                                .db
+                                .get("Settings", "__config__")
+                                .get("allow_nonstandart_prefixes")
+                                .and_then(Value::as_bool)
+                                == Some(true)),
+                    "{}",
+                    crate::original::text(
+                        self.db.language().starts_with("en"),
+                        "settings",
+                        "prefix_incorrect"
+                    )
                 );
                 if let Some(target) = parts.get(1) {
                     let user =
@@ -745,14 +838,86 @@ impl Context {
                 } else {
                     self.db.set("atarustia.main", "command_prefix", prefix)?;
                 }
-                self.tr("prefix_saved", &[("prefix", prefix.into())])
+                let personal = parts.get(1);
+                let text = crate::original::message(
+                    self.db.language().starts_with("en"),
+                    "settings",
+                    if personal.is_some() {
+                        "entity_prefix_set"
+                    } else {
+                        "prefix_set"
+                    },
+                    &["<tg-emoji emoji-id=5197474765387864959>👍</tg-emoji>".into()],
+                    &[
+                        ("newprefix", crate::output::escape(prefix)),
+                        ("oldprefix", crate::output::escape(&oldprefix)),
+                        (
+                            "entity_name",
+                            crate::output::escape(personal.copied().unwrap_or("")),
+                        ),
+                        (
+                            "entity_id",
+                            crate::output::escape(personal.copied().unwrap_or("")),
+                        ),
+                    ],
+                );
+                self.answer_html(m, &text).await?;
+                return Ok(None);
             }
             "setlang" => {
                 ensure!(matches!(args, "ru" | "en"), "use ru or en");
                 self.db.set("atarustia.translations", "lang", args)?;
-                self.tr("language_saved", &[("language", args.into())])
+                self.answer_html(
+                    m,
+                    &self.original(
+                        "translations",
+                        "lang_saved",
+                        &[if args == "en" { "🇬🇧" } else { "🇷🇺" }.into()],
+                    ),
+                )
+                .await?;
+                return Ok(None);
             }
-            "aliases" => serde_json::to_string_pretty(&self.db.get("Settings", "aliases"))?,
+            "aliases" => {
+                let saved = self.db.get("Settings", "aliases");
+                let emoji = self
+                    .db
+                    .get("Settings", "__config__")
+                    .get("alias_emoji")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<tg-emoji emoji-id=4974259868996207180>▪️</tg-emoji>")
+                    .to_owned();
+                let lines = saved
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|m| m.iter())
+                    .map(|(alias, target)| {
+                        format!(
+                            "{emoji} <code>{}</code> &lt;- {}",
+                            crate::output::escape(alias),
+                            crate::output::escape(target.as_str().unwrap_or(""))
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let text = format!(
+                    "{}<blockquote expandable>{lines}</blockquote>",
+                    crate::original::text(
+                        self.db.language().starts_with("en"),
+                        "settings",
+                        "aliases"
+                    )
+                );
+                let body = grammers_client::message::InputMessage::new()
+                    .html(text)
+                    .link_preview(false);
+                if m.outgoing() {
+                    m.edit(body).await?;
+                } else {
+                    m.reply(body).await?;
+                }
+                return Ok(None);
+            }
             "addalias" => {
                 let (alias, target) = args
                     .split_once(char::is_whitespace)
@@ -772,7 +937,12 @@ impl Context {
                 );
                 self.db
                     .set("Settings", "aliases", serde_json::to_value(a)?)?;
-                self.tr("alias_saved", &[])
+                self.answer_html(
+                    m,
+                    &self.original("settings", "alias_created", &[crate::output::escape(alias)]),
+                )
+                .await?;
+                return Ok(None);
             }
             "delalias" => {
                 let mut a: HashMap<String, String> =
@@ -780,7 +950,12 @@ impl Context {
                 ensure!(a.remove(args).is_some(), "alias not found");
                 self.db
                     .set("Settings", "aliases", serde_json::to_value(a)?)?;
-                self.tr("alias_deleted", &[])
+                self.answer_html(
+                    m,
+                    &self.original("settings", "alias_removed", &[crate::output::escape(args)]),
+                )
+                .await?;
+                return Ok(None);
             }
             "config" | "settings" => {
                 if args.is_empty() {
@@ -792,14 +967,19 @@ impl Context {
                 }
             }
             "fconfig" => {
-                let mut parts = args.splitn(3, char::is_whitespace);
-                let module = parts.next().context("module missing")?;
-                let key = parts.next().context("key missing")?;
-                let value: Value =
-                    serde_json::from_str(parts.next().context("JSON value missing")?)?;
-                crate::screens::set_config(self, module, key, value)?;
+                let reply = m.get_reply().await?;
+                let text =
+                    crate::config_ui::fast_config(self, args, reply.as_ref().map(|m| m.text()))?;
                 crate::module_lifecycle::config_changes(self).await;
-                self.tr("config_saved", &[])
+                let input = grammers_client::message::InputMessage::new()
+                    .html(text)
+                    .link_preview(false);
+                if m.outgoing() {
+                    m.edit(input).await?;
+                } else {
+                    m.reply(input).await?;
+                }
+                return Ok(None);
             }
             "modules" => {
                 let list = self.modules.lock().unwrap().list();

@@ -7,21 +7,28 @@ use grammers_session::types::PeerRef;
 pub async fn setup(client: &Client, db: &Database) -> Result<i64> {
     let mut dialogs = client.iter_dialogs();
     let mut found = None;
+    let saved = db.get("atarustia.forums", "channel_id").as_i64();
     while let Some(dialog) = dialogs.next().await? {
         if let Peer::Group(group) = dialog.peer()
             && let tl::enums::Chat::Channel(channel) = &group.raw
             && channel.creator
-            && channel.title == "atarustia-userbot"
+            && (saved == Some(channel.id) || channel.title == crate::original::FORUM_TITLE)
         {
-            found = Some((
-                channel.id,
-                channel.access_hash.context("channel access hash missing")?,
-                channel.forum,
-            ));
-            break;
+            if found.is_none() || saved == Some(channel.id) {
+                found = Some((
+                    channel.id,
+                    channel.access_hash.context("channel access hash missing")?,
+                    channel.forum,
+                    channel.title.clone(),
+                ));
+            }
+            if saved == Some(channel.id) {
+                break;
+            }
         }
     }
-    let (id, hash, forum) = if let Some(found) = found {
+    let created = found.is_none();
+    let (id, hash, forum, title) = if let Some(found) = found {
         found
     } else {
         let updates = client
@@ -30,8 +37,8 @@ pub async fn setup(client: &Client, db: &Database) -> Result<i64> {
                 megagroup: true,
                 for_import: false,
                 forum: true,
-                title: "atarustia-userbot".into(),
-                about: "atarustia Rust · assets, backups and logs".into(),
+                title: crate::original::FORUM_TITLE.into(),
+                about: crate::original::FORUM_DESCRIPTION.into(),
                 geo_point: None,
                 address: None,
                 ttl_period: None,
@@ -47,7 +54,7 @@ pub async fn setup(client: &Client, db: &Database) -> Result<i64> {
             .find_map(|c| {
                 if let tl::enums::Chat::Channel(c) = c {
                     if c.creator {
-                        Some((c.id, c.access_hash?, c.forum))
+                        Some((c.id, c.access_hash?, c.forum, c.title))
                     } else {
                         None
                     }
@@ -65,6 +72,46 @@ pub async fn setup(client: &Client, db: &Database) -> Result<i64> {
         channel_id: id,
         access_hash: hash,
     });
+    if title == "atarustia-userbot" {
+        // Only the previously recorded, account-owned service chat is migrated.
+        client
+            .invoke(&tl::functions::channels::EditTitle {
+                channel: channel.clone(),
+                title: crate::original::FORUM_TITLE.into(),
+            })
+            .await?;
+        client
+            .invoke(&tl::functions::messages::EditChatAbout {
+                peer: input.clone(),
+                about: crate::original::FORUM_DESCRIPTION.into(),
+            })
+            .await?;
+    }
+    if created || title == "atarustia-userbot" {
+        let bytes = include_bytes!("../assets/bot_pfp.png");
+        let result = async {
+            let upload = client
+                .upload_stream(&mut bytes.as_slice(), bytes.len(), "bot_pfp.png".into())
+                .await?;
+            client
+                .invoke(&tl::functions::channels::EditPhoto {
+                    channel: channel.clone(),
+                    photo: tl::types::InputChatUploadedPhoto {
+                        file: Some(upload.raw),
+                        video: None,
+                        video_start_ts: None,
+                        video_emoji_markup: None,
+                    }
+                    .into(),
+                })
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(error=%error,"cannot set service chat avatar");
+        }
+    }
     if !forum {
         client
             .invoke(&tl::functions::channels::ToggleForum {
@@ -98,7 +145,7 @@ pub async fn setup(client: &Client, db: &Database) -> Result<i64> {
                     peer: input.clone(),
                     title: title.into(),
                     icon_color: Some(0x6fb9f0),
-                    icon_emoji_id: None,
+                    icon_emoji_id: Some(5877307202888273539),
                     random_id: rand::random(),
                     send_as: None,
                 })
@@ -126,7 +173,7 @@ pub async fn setup(client: &Client, db: &Database) -> Result<i64> {
     db.set(
         "atarustia.forums",
         "forums_cache",
-        serde_json::json!({"atarustia-userbot":topics}),
+        serde_json::json!({crate::original::FORUM_TITLE:topics}),
     )?;
     Ok(id)
 }
@@ -143,7 +190,8 @@ pub async fn topic_destination(
     };
     let value = db.get("atarustia.forums", "forums_cache");
     let Some(topic) = value
-        .get("atarustia-userbot")
+        .get(crate::original::FORUM_TITLE)
+        .or_else(|| value.get("atarustia-userbot"))
         .and_then(|v| v.get(name))
         .and_then(serde_json::Value::as_i64)
     else {
