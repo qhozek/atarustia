@@ -105,7 +105,12 @@ pub fn resolve(
     let mut name = name.to_lowercase();
     let mut args = args.to_owned();
     let mut seen = HashSet::new();
-    while let Some(target) = aliases.get(&name) {
+    while let Some(target) = aliases.get(&name).or_else(|| {
+        aliases
+            .iter()
+            .find(|(alias, _)| alias.trim().eq_ignore_ascii_case(&name))
+            .map(|(_, target)| target)
+    }) {
         ensure!(seen.insert(name.clone()) && seen.len() <= 16, "alias cycle");
         let (next, fixed) = target
             .split_once(char::is_whitespace)
@@ -229,6 +234,14 @@ mod tests {
         );
         a.insert("ping".into(), "p".into());
         assert!(resolve("p", "", &a).is_err());
+    }
+    #[test]
+    fn older_mixed_case_aliases_keep_fixed_arguments() {
+        let aliases = HashMap::from([("MiXeD".into(), "PING KeepCase".into())]);
+        assert_eq!(
+            resolve("mixed", "MoreCase", &aliases).unwrap(),
+            ("ping".into(), "KeepCase MoreCase".into())
+        );
     }
     #[test]
     fn limits() {

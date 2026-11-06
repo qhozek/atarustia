@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 #[test]
-fn frontend_is_the_unmodified_original_snapshot() {
+fn legacy_opt_in_frontend_keeps_its_original_attribution_and_assets() {
     for (bytes, hash) in [
         (
             include_bytes!("../web-resources/index.html").as_slice(),
@@ -28,7 +28,7 @@ fn frontend_is_the_unmodified_original_snapshot() {
 }
 #[test]
 fn command_catalogue_contains_exactly_the_original_names() {
-    let expected = "info help helphide ataraxia dlm lm ulm ml clearmodules config fconfig settings setprefix setlang aliases addalias delalias watchers watcher watcherbl nonickcmd nonickuser nonickchat nonickcmds nonickusers nonickchats e terminal terminate ec ecpp enode security inlinesec owneradd ownerrm ownerlist newsgroup sgroups sgroup delsgroup sgroupadd sgroupdel tsec tsecrm tsecclr querysec backupall restoreall backupdb restoredb backupmods restoremods set_backup_period update restart source ping logs clearlogs suspend weburl addacc ch_ataraxia_bot ch_bot_token suspend_api_protect api_fw_protection dllangpack cleardb clearmodule";
+    let expected = "info help helphide ataraxia dlm lm ulm ml clearmodules config fconfig settings setprefix setlang aliases addalias delalias watchers watcher watcherbl nonickcmd nonickuser nonickchat nonickcmds nonickusers nonickchats e terminal terminate ec ecpp enode security inlinesec owneradd ownerrm ownerlist newsgroup sgroups sgroup delsgroup sgroupadd sgroupdel tsec tsecrm tsecclr querysec backupall restoreall backupdb restoredb backupmods restoremods set_backup_period update restart source ping logs clearlogs addacc ch_ataraxia_bot ch_bot_token dllangpack cleardb clearmodule";
     let expected: std::collections::BTreeSet<_> = expected.split_whitespace().collect();
     let actual: std::collections::BTreeSet<_> = atarustia::commands::BUILTINS
         .iter()
@@ -37,6 +37,7 @@ fn command_catalogue_contains_exactly_the_original_names() {
         .map(|(name, _)| *name)
         .collect();
     assert_eq!(actual, expected);
+    assert_eq!(actual.len(), 66);
     for name in [
         "modstatus",
         "modpause",
@@ -50,8 +51,53 @@ fn command_catalogue_contains_exactly_the_original_names() {
         "modules",
         "tglogs",
         "importbackup",
+        "weburl",
+        "suspend",
+        "api_fw_protection",
+        "suspend_api_protect",
     ] {
         assert!(!atarustia::commands::is_builtin(name));
+    }
+}
+#[test]
+fn current_main_locales_and_terminal_artwork_match_the_pinned_source() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/current_main.json")).unwrap();
+    assert_eq!(fixture["revision"], atarustia::original::REVISION);
+    for (name, bytes) in [
+        (
+            "en.yml",
+            include_bytes!("../locales/original/en.yml").as_slice(),
+        ),
+        (
+            "ru.yml",
+            include_bytes!("../locales/original/ru.yml").as_slice(),
+        ),
+        (
+            "banner.txt",
+            include_bytes!("../assets/banner.txt").as_slice(),
+        ),
+        (
+            "success.txt",
+            include_bytes!("../assets/success.txt").as_slice(),
+        ),
+        ("2fa.txt", include_bytes!("../assets/2fa.txt").as_slice()),
+    ] {
+        assert_eq!(
+            hex::encode(Sha256::digest(bytes)),
+            fixture["sha256"][name],
+            "{name}"
+        );
+    }
+    for english in [false, true] {
+        for (module, key) in [
+            ("ataraxia_accounts", "login_timeout"),
+            ("ataraxia_backup", "confirm_restore"),
+            ("$inline", "stale_button"),
+            ("$main", "started_info"),
+        ] {
+            assert_ne!(atarustia::original::text(english, module, key), key);
+        }
     }
 }
 #[test]

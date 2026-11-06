@@ -1,0 +1,10 @@
+{
+  "revision": "122c2692391b1bfc40456270b7ff998c2ee10af8",
+  "sha256": {
+    "en.yml": "9fa6c94e664bdd0b029a8abd699996616e3ad3e916e461af3e9bf924dbfc5add",
+    "ru.yml": "b74cae1b3c9f11e042170691244edcf2a04232509fa0be0badf0b5b02c0b23a2",
+    "banner.txt": "abc2b4b788e0cb7513962aa255ca01a4b595e9931eb44e7c6a687d066b0f0798",
+    "success.txt": "b835392831f43975986fc86de75a3eb7bdc993b1ab804fde515dcd4837ef7560",
+    "2fa.txt": "b94bc5cee75e1bfbf950028e503ba613234b0e904dcbfecc7acb34c8df186a46"
+  }
+}

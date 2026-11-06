@@ -24,6 +24,7 @@ pub async fn run_with_modules(
     logs: crate::logs::LogBuffer,
     native: Arc<crate::sdk::Registry>,
 ) -> Result<bool> {
+    let web_enabled = options.web_enabled();
     crate::config::validate_account(&options.account)?;
     if let Some(proxy) = &options.proxy {
         crate::telegram::validate_proxy(proxy)?;
@@ -63,9 +64,9 @@ pub async fn run_with_modules(
     }
     let mut config = Config::load(&root)?;
     let mut web_bootstrap = None;
-    if !options.no_web
+    if web_enabled
         && !options.no_auth
-        && options.api_preset == "ask"
+        && options.api_preset != "tdesktop"
         && options.api_id.is_none()
         && options.api_hash.is_none()
         && config.credentials.is_none()
@@ -132,7 +133,7 @@ pub async fn run_with_modules(
     let _cancel_on_error = stop.clone().drop_guard();
     let web = if let Some((web, _, _)) = &web_bootstrap {
         Some(web.clone())
-    } else if options.no_web {
+    } else if !web_enabled {
         None
     } else {
         // No plaintext login over an exposed listener. Use SSH forwarding.

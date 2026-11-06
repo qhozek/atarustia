@@ -19,10 +19,31 @@ async fn main() -> Result<()> {
         .init();
     let restart = atarustia::runtime::run(atarustia::config::Options::parse(), logs).await?;
     if restart {
-        let mut command = std::process::Command::new("cargo");
-        command
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .args(["run", "--locked", "--"]);
+        // Update already linked this alternate executable before stopping accounts.
+        // A plain restart reuses the current binary and does not invoke Cargo again.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let next = atarustia::updater::built_executable(root);
+        let current = std::env::current_exe()?;
+        let options = atarustia::config::Options::parse();
+        let config = atarustia::config::Config::load(&options.data_root)?;
+        let mut updated = false;
+        for account in config.accounts.values() {
+            if let Some(owner) = account.owner_id {
+                let db = atarustia::database::Database::open(&options.data_root, owner)?;
+                updated |= next.to_str().is_some_and(|path| {
+                    db.get("RustUpdater", "next_executable").as_str() == Some(path)
+                });
+                db.set("RustUpdater", "next_executable", serde_json::Value::Null)?;
+            }
+        }
+        let executable = if updated {
+            anyhow::ensure!(next.is_file(), "compiled update executable is missing");
+            next
+        } else {
+            current
+        };
+        let mut command = std::process::Command::new(executable);
+        command.current_dir(std::env::current_dir()?);
         let args: Vec<_> = std::env::args_os().skip(1).collect();
         #[cfg(unix)]
         {

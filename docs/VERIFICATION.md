@@ -2,6 +2,12 @@
 
 Локальная среда: Windows x86_64, Rust 1.99.1 GNU. Проверки выполняются без Telegram credentials.
 
+Этап current-main (2026-11-07): добавлены проверки каталога 66 команд / 13 модулей,
+SHA-256 текущих RU/EN langpacks и terminal artwork, terminal/custom login defaults,
+case-insensitive legacy aliases, unknown RTT и чередования update build-каталогов.
+Отдельный synthetic Cargo project проверяет ошибку линковки до shutdown (не только type-check).
+Вход, визуальное совпадение Telegram и реальный self-update этим не подтверждаются.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -24,7 +30,7 @@ Lifecycle/Effect: hooks установки/старта/замены/выгру�
 side effects. Реальная доставка новых background screens/media и callback animations требует Telegram.
 Release-бинарники не собираются и не поставляются.
 Original parity: SHA-256 оригинальных frontend assets, точный каталог 70 команд, исходные строки,
-API state/app/cancel, поля code view и rounded QR SVG. Первый app screen проверен в браузере
+legacy API state/app/cancel, поля code view и rounded QR SVG. Первый app screen проверен в браузере
 на Rust HTTP-сервере без ввода Telegram credentials. Остальной живой login flow не проверен.
 
 Config/Settings: `tests/config_ui.rs` проверяет исходные строки и структуру меню,
@@ -40,5 +46,5 @@ Premium-иконки, switch-inline input tokens и ограниченный р�
 Presentation: `tests/presentation.rs` закрепляет SHA-256 трёх исходных PNG, имена бота/форума,
 схему username, структуру и стили quickstart/start, исходный шаблон ping, безопасную подстановку
 значений и строки help/updater. `tests/native.rs` закрепляет 14 имён встроенных модулей,
-распределение всех 70 команд, отсутствие выдуманной версии, полный список команд Settings
+распределение всех 66 команд, отсутствие выдуманной версии, полный список команд Settings
 и чтение старых hidden-module имён. Это не живая проверка Telegram RPC или screenshot parity.

@@ -758,11 +758,9 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
     ));
     if long && !masked {
         c.add(format!(
-            "<b>{}</b>\n<blockquote expandable>{}</blockquote>\n{} <i>{}</i>",
+            "<b>{}</b>\n<blockquote expandable>{}</blockquote>",
             ui.text("current"),
-            escape(value.as_str().unwrap()),
-            ui.icon("info"),
-            ui.text("long_hint")
+            escape(value.as_str().unwrap())
         ));
     }
     if !text_kind && let Some(validator) = v {

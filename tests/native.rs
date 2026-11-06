@@ -267,7 +267,7 @@ async fn config_reset_navigation_storage_and_manifest_metadata_are_bound() {
     f.connection.close().await.unwrap();
 }
 #[tokio::test]
-async fn builtin_catalogue_has_original_fourteen_modules_and_command_ownership() {
+async fn builtin_catalogue_has_current_thirteen_modules_and_command_ownership() {
     let f = Fixture::new();
     let catalogue = atarustia::help::catalog(&f.ctx);
     let actual: std::collections::BTreeSet<_> = catalogue
@@ -276,7 +276,7 @@ async fn builtin_catalogue_has_original_fourteen_modules_and_command_ownership()
         .filter(|m| m.core)
         .map(|m| m.name.as_str())
         .collect();
-    let expected="APILimiter ataraxiaBackup ataraxiaConfig ataraxiaInfo ataraxiaSecurity ataraxiaWeb Executor InlineStuff Loader Quickstart Settings Tester Translations Updater".split_whitespace().collect();
+    let expected="ataraxiaAccounts ataraxiaBackup ataraxiaConfig ataraxiaInfo ataraxiaSecurity Executor InlineStuff Loader Quickstart Settings Tester Translations Updater".split_whitespace().collect();
     assert_eq!(actual, expected);
     assert_eq!(
         catalogue
@@ -284,21 +284,20 @@ async fn builtin_catalogue_has_original_fourteen_modules_and_command_ownership()
             .iter()
             .map(|m| m.commands.len())
             .sum::<usize>(),
-        70
+        66
     );
     for (name, count) in [
-        ("APILimiter", 2),
+        ("ataraxiaAccounts", 1),
         ("ataraxiaBackup", 7),
         ("ataraxiaConfig", 2),
         ("ataraxiaInfo", 3),
         ("ataraxiaSecurity", 15),
-        ("ataraxiaWeb", 2),
         ("Executor", 6),
         ("InlineStuff", 2),
         ("Loader", 5),
         ("Quickstart", 0),
         ("Settings", 17),
-        ("Tester", 4),
+        ("Tester", 3),
         ("Translations", 2),
         ("Updater", 3),
     ] {
@@ -316,7 +315,7 @@ async fn builtin_catalogue_has_original_fourteen_modules_and_command_ownership()
     }
     for (command, module) in [
         ("ataraxia", "Settings"),
-        ("suspend", "Tester"),
+        ("addacc", "ataraxiaAccounts"),
         ("ch_ataraxia_bot", "InlineStuff"),
         ("ch_bot_token", "InlineStuff"),
         ("querysec", "ataraxiaSecurity"),

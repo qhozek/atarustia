@@ -2,7 +2,7 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::sync::OnceLock;
-pub const REVISION: &str = "a58e7019690abfec05e06b7383538fad39dc2d01";
+pub const REVISION: &str = "122c2692391b1bfc40456270b7ff998c2ee10af8";
 pub const NAME: &str = "ataraxia";
 pub const CODENAME: &str = "Rise";
 pub const BOT_NAME: &str = "⛈️ ataraxia";
@@ -28,6 +28,7 @@ pub fn module_key(name: &str) -> &str {
         "ataraxiaBackup" => "ataraxia_backup",
         "ataraxiaConfig" => "ataraxia_config",
         "ataraxiaWeb" => "ataraxia_web",
+        "ataraxiaAccounts" => "ataraxia_accounts",
         "InlineStuff" => "inline_stuff",
         "Quickstart" => "quickstart",
         "Executor" => "executor",
@@ -44,6 +45,7 @@ pub fn module_description(english: bool, name: &str) -> String {
     }
     match canonical_module(name) {
         "ataraxiaWeb" => "Web/Inline mode add account",
+        "ataraxiaAccounts" => "Adds accounts through the inline bot",
         "ataraxiaBackup" => "Handles database and modules backups",
         "ataraxiaInfo" => "Userbot info and help",
         "ataraxiaConfig" => "Interactive configurator for ataraxia Userbot",
@@ -124,7 +126,21 @@ pub fn bot_username() -> String {
 pub fn text(english: bool, module: &str, key: &str) -> String {
     static EN: OnceLock<Value> = OnceLock::new();
     static RU: OnceLock<Value> = OnceLock::new();
-    let pack = if english {
+    // Legacy web strings must not shadow the pinned current-main langpacks.
+    static LEGACY_EN: OnceLock<Value> = OnceLock::new();
+    static LEGACY_RU: OnceLock<Value> = OnceLock::new();
+    let legacy = matches!(module, "$web" | "ataraxia_web");
+    let pack = if legacy && english {
+        LEGACY_EN.get_or_init(|| {
+            serde_yaml::from_str(include_str!("../locales/legacy/en.yml"))
+                .expect("legacy English web strings")
+        })
+    } else if legacy {
+        LEGACY_RU.get_or_init(|| {
+            serde_yaml::from_str(include_str!("../locales/legacy/ru.yml"))
+                .expect("legacy Russian web strings")
+        })
+    } else if english {
         EN.get_or_init(|| {
             serde_yaml::from_str(include_str!("../locales/original/en.yml"))
                 .expect("original English strings")

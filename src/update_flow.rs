@@ -385,6 +385,8 @@ pub async fn update(ctx: &Context, surface: &Surface, report: Report, retry: boo
         .try_lock()
         .context("account maintenance is running")?;
     ensure!(!ctx.stop.is_cancelled(), "shutdown already requested");
+    ctx.db
+        .set("RustUpdater", "next_executable", serde_json::Value::Null)?;
     let ui = Ui::new(&ctx.db);
     let started = crate::security::now();
     let timer = Instant::now();
@@ -461,6 +463,11 @@ pub async fn update(ctx: &Context, surface: &Surface, report: Report, retry: boo
             changes: Some(report.changes),
         },
     )?;
+    ctx.db.set(
+        "RustUpdater",
+        "next_executable",
+        updater::built_executable(root()).to_string_lossy().as_ref(),
+    )?;
     ctx.stop.cancel();
     Ok(())
 }
@@ -473,6 +480,8 @@ pub async fn restart(ctx: &Context, surface: &Surface) -> Result<()> {
         .try_lock()
         .context("account maintenance is running")?;
     ensure!(!ctx.stop.is_cancelled(), "shutdown already requested");
+    ctx.db
+        .set("RustUpdater", "next_executable", serde_json::Value::Null)?;
     best_effort(surface, ctx, Ui::new(&ctx.db).restarting()).await;
     remember(
         &ctx.db,

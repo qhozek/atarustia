@@ -67,18 +67,6 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ),
     ("terminal", "<shell> — команда ОС (нужен --allow-shell)"),
     ("terminate", "в ответ на команду — остановить выполнение"),
-    (
-        "suspend",
-        "<seconds> — приостановить обработку команд аккаунта",
-    ),
-    (
-        "api_fw_protection",
-        "on|off — асинхронный ограничитель обработки команд",
-    ),
-    (
-        "suspend_api_protect",
-        "<seconds> — временно приостановить ограничитель",
-    ),
     ("ec", "<C source> — gcc"),
     ("ecpp", "<C++ source> — g++"),
     ("enode", "<JavaScript> — node"),
@@ -102,7 +90,6 @@ pub const BUILTINS: &[(&str, &str)] = &[
         "set_backup_period",
         "<hours|0> — период автоматических копий",
     ),
-    ("weburl", "одноразовая ссылка, только в Избранном"),
     ("source", "исходный проект и версия порта"),
     ("restart", "[-f] — перезапуск с подтверждением"),
 ];
@@ -286,16 +273,6 @@ impl Context {
         } else {
             (args, None)
         };
-        if name != "suspend"
-            && self
-                .db
-                .get("RustRuntime", "paused_until")
-                .as_u64()
-                .unwrap_or(0)
-                > security::now()
-        {
-            return Ok(());
-        }
         let module = self.modules.lock().expect("modules lock").command(&name);
         let native = self.native.command(&name);
         if !is_builtin(&name) && module.is_none() && native.is_none() {
@@ -339,12 +316,6 @@ impl Context {
             .await?
         {
             return Ok(());
-        }
-        let limits: crate::api_protection::Limits =
-            serde_json::from_value(self.db.get("RustApiProtection", "limits")).unwrap_or_default();
-        let delay = self.api_limits.delay(&limits);
-        if !delay.is_zero() {
-            tokio::select! {_=self.stop.cancelled()=>return Ok(()),_=tokio::time::sleep(delay)=>{}}
         }
         if !crate::preferences::addressed(
             &self.db,
@@ -923,13 +894,23 @@ impl Context {
                     .split_once(char::is_whitespace)
                     .context("usage: addalias <alias> <command>")?;
                 ensure!(
-                    crate::modules::valid_name(alias) && !is_builtin(alias),
+                    crate::modules::valid_name(&alias.to_lowercase())
+                        && !is_builtin(&alias.to_lowercase()),
                     "invalid alias or built-in collision"
                 );
                 let mut a: HashMap<String, String> =
                     serde_json::from_value(self.db.get("Settings", "aliases")).unwrap_or_default();
-                a.insert(alias.into(), target.trim().into());
-                let (resolved, _) = crate::dispatcher::resolve(alias, "", &a)?;
+                let alias = alias.to_lowercase();
+                let (command, fixed) = target
+                    .trim()
+                    .split_once(char::is_whitespace)
+                    .unwrap_or((target.trim(), ""));
+                let target = format!("{} {}", command.to_lowercase(), fixed)
+                    .trim()
+                    .to_owned();
+                a.retain(|name, _| !name.eq_ignore_ascii_case(&alias));
+                a.insert(alias.clone(), target);
+                let (resolved, _) = crate::dispatcher::resolve(&alias, "", &a)?;
                 ensure!(
                     is_builtin(&resolved)
                         || self.modules.lock().unwrap().command(&resolved).is_some(),
@@ -939,7 +920,11 @@ impl Context {
                     .set("Settings", "aliases", serde_json::to_value(a)?)?;
                 self.answer_html(
                     m,
-                    &self.original("settings", "alias_created", &[crate::output::escape(alias)]),
+                    &self.original(
+                        "settings",
+                        "alias_created",
+                        &[crate::output::escape(&alias)],
+                    ),
                 )
                 .await?;
                 return Ok(None);
@@ -947,7 +932,9 @@ impl Context {
             "delalias" => {
                 let mut a: HashMap<String, String> =
                     serde_json::from_value(self.db.get("Settings", "aliases")).unwrap_or_default();
-                ensure!(a.remove(args).is_some(), "alias not found");
+                let before = a.len();
+                a.retain(|name, _| !name.eq_ignore_ascii_case(args.trim()));
+                ensure!(a.len() != before, "alias not found");
                 self.db
                     .set("Settings", "aliases", serde_json::to_value(a)?)?;
                 self.answer_html(
@@ -1280,15 +1267,6 @@ impl Context {
         Ok(())
     }
     pub async fn handle_event(&self, event: crate::modules::Event) -> Result<()> {
-        if self
-            .db
-            .get("RustRuntime", "paused_until")
-            .as_u64()
-            .unwrap_or(0)
-            > security::now()
-        {
-            return Ok(());
-        }
         // Watchers only reply to the triggering message's own chat. No arbitrary remote targets.
         let _serial = self.events.lock().await;
         let packages = self.modules.lock().unwrap().export();

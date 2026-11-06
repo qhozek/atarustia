@@ -207,7 +207,7 @@ async fn apply_exact(
         .await
         .context("upstream diverged; refusing to reset local history")?;
     git(root, &["merge", "--ff-only", expected]).await?;
-    // Cargo compiles from source after restart. No prebuilt/release artifact is created here.
+    // Source movement only; sync() must link the next binary before restart.
     Ok(())
 }
 
@@ -264,15 +264,64 @@ async fn run(
         .context("update process timed out")?
 }
 pub async fn sync(root: &Path) -> Result<()> {
+    let target = build_directory(root);
     let mut command = tokio::process::Command::new("cargo");
-    command.args(["check", "--locked", "--bin", "atarustia"]);
+    // Check skips linking: do not stop a working account for an unlinked update.
+    command
+        .args(["build", "--locked", "--bin", "atarustia", "--target-dir"])
+        .arg(&target);
     let (success, output, errors) = run(&mut command, root, Duration::from_secs(300)).await?;
     ensure!(success, "{output}{errors}");
     Ok(())
 }
+/// Alternate build directories: Windows cannot overwrite the running executable.
+pub fn build_directory(root: &Path) -> std::path::PathBuf {
+    let current = std::env::current_exe().unwrap_or_default();
+    build_directory_for(root, &current)
+}
+fn build_directory_for(root: &Path, current: &Path) -> std::path::PathBuf {
+    let target = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(path) => root.join(path),
+        None => root.join("target"),
+    };
+    alternate_directory(&target, current)
+}
+fn alternate_directory(target: &Path, current: &Path) -> std::path::PathBuf {
+    let first = target.join("atarustia-update-a");
+    if current.starts_with(&first) {
+        target.join("atarustia-update-b")
+    } else {
+        first
+    }
+}
+pub fn built_executable(root: &Path) -> std::path::PathBuf {
+    build_directory(root).join("debug").join(if cfg!(windows) {
+        "atarustia.exe"
+    } else {
+        "atarustia"
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_build_never_overwrites_the_running_windows_executable() {
+        let target = Path::new("target");
+        let first = target.join("atarustia-update-a");
+        let second = target.join("atarustia-update-b");
+        assert_eq!(
+            alternate_directory(target, &target.join("debug/atarustia.exe")),
+            first
+        );
+        assert_eq!(
+            alternate_directory(target, &first.join("debug/atarustia.exe")),
+            second
+        );
+        assert_eq!(
+            alternate_directory(target, &second.join("debug/atarustia.exe")),
+            first
+        );
+    }
     fn shell(script: &str) -> tokio::process::Command {
         #[cfg(windows)]
         {
@@ -501,6 +550,25 @@ mod tests {
         assert!(error.contains("error"));
         assert!(dir.path().join("src/main.rs").is_file());
         assert!(!dir.path().join("target/release").exists());
+    }
+    #[tokio::test]
+    async fn linker_failure_is_reported_before_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname='atarustia'\nversion='0.0.0'\nedition='2024'\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.lock"),
+            "version = 4\n[[package]]\nname = 'atarustia'\nversion = '0.0.0'\n",
+        )
+        .unwrap();
+        // Type-checks, but deliberately cannot link. cargo check used to accept this.
+        std::fs::write(dir.path().join("src/main.rs"),
+            "unsafe extern \"C\" { fn atarustia_missing_link_symbol(); }\nfn main() { unsafe { atarustia_missing_link_symbol(); } }\n").unwrap();
+        assert!(sync(dir.path()).await.is_err());
     }
     #[tokio::test]
     async fn wrong_origin_is_rejected_before_fetch() {

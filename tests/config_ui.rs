@@ -226,7 +226,8 @@ fn hidden_values_never_leak_via_copy_or_default() {
 #[test]
 fn long_value_reply_and_series_add_remove() {
     let s = render(&state("long"));
-    assert!(s.text.contains("длинное значение — ответом на сообщение"));
+    assert!(s.text.contains("<blockquote expandable>"));
+    assert!(!s.text.contains("long_hint"));
     assert!(s.config_reply.is_some());
     let s = render(&state("items"));
     assert!(s.rich_buttons.iter().any(|k| matches!(

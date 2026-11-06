@@ -69,7 +69,14 @@ pub fn ping_render(
     extra: &[(&str, String)],
 ) -> String {
     let mut values = std::collections::BTreeMap::from([
-        ("ping", ping.to_string()),
+        (
+            "ping",
+            if ping.is_finite() {
+                ping.to_string()
+            } else {
+                "?".into()
+            },
+        ),
         ("uptime", crate::info::uptime(uptime)),
         (
             "ping_hint",
@@ -90,14 +97,23 @@ pub fn ping_render(
 pub async fn ping(ctx: &Context, message: &Message) -> Result<()> {
     let config = PingConfig::load(&ctx.db)?;
     config.validate()?;
-    let start = std::time::Instant::now();
     let shown = if message.outgoing() {
         message.edit(&config.ping_emoji).await?;
         message.clone()
     } else {
         message.reply(&config.ping_emoji).await?
     };
-    let elapsed = (start.elapsed().as_secs_f64() * 1e6).round() / 1000.;
+    let start = std::time::Instant::now();
+    let elapsed = match ctx
+        .client
+        .invoke(&grammers_client::tl::functions::Ping {
+            ping_id: rand::random::<i64>() & i64::MAX,
+        })
+        .await
+    {
+        Ok(_) => (start.elapsed().as_secs_f64() * 1e6).round() / 1000.,
+        Err(_) => f64::NAN,
+    };
     let premium = ctx
         .db
         .get("RustRuntime", "premium")

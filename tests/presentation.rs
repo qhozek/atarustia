@@ -126,6 +126,7 @@ fn ping_uses_original_template_and_real_measurement_placeholders() {
     let config = presentation::PingConfig::default();
     assert_eq!(config.ping_emoji, "⛈️");
     let plain = presentation::ping_text(&config, 12.345, 90061, false, false);
+    assert!(presentation::ping_text(&config, f64::NAN, 0, false, false).contains("Ping:</b> ?"));
     assert_eq!(
         plain,
         "<blockquote>⚡ <b>Ping:</b> 12.345</blockquote>\n<blockquote>🕓 <b>Uptime:</b> 1 day(s), 1:01:01</blockquote>"

@@ -23,11 +23,13 @@ pub fn parse_app(id_and_hash: &str, hash: Option<&str>) -> Result<Credentials> {
 }
 pub async fn terminal_app(preset: &str) -> Result<Credentials> {
     let own = if preset == "ask" {
-        println!("\nTelegram app\n1. Telegram Desktop\n2. My own app (my.telegram.org/apps)");
+        println!(
+            "\nTelegram app\n1. My own app (my.telegram.org/apps)\n2. Telegram Desktop (legacy preset)"
+        );
         loop {
             match crate::auth::prompt("Choose [1]: ", false).await?.as_str() {
-                "" | "1" => break false,
-                "2" => break true,
+                "" | "1" => break true,
+                "2" => break false,
                 _ => println!("Enter 1 or 2."),
             }
         }

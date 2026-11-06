@@ -2,12 +2,13 @@
 
 The user's requirement is a faithful copy of Ataraxia implemented in Rust, not a redesign or
 an independently designed userbot. Reference: https://git.break.wtf/xenside/ataraxia,
-snapshot a58e7019690abfec05e06b7383538fad39dc2d01.
+current main, pinned for this port at 122c2692391b1bfc40456270b7ff998c2ee10af8.
 
 - Preserve original public command names, argument semantics, messages, buttons, navigation,
-  visuals, assets and web frontend. Do not invent extra commands or rename commands to atarustia.
-- The original frontend in web-resources/ is copied byte-for-byte. Adapt the Rust backend to its
-  API contract; do not rewrite the frontend to suit the backend. Preserve attribution in NOTICE.
+  visuals and assets. Do not invent extra commands or rename commands to atarustia.
+- Current Ataraxia uses terminal login and 66 commands in 13 built-in modules. The old web
+  frontend is a legacy, explicitly opt-in extension, not part of current-main parity. Preserve
+  its attribution in NOTICE; do not discard old account data while migrating login flows.
 - Use locales/original/ for original strings. Technical implementation differences must be
   explicit and must not be disguised as equivalent behavior.
 - Keep internal Rust APIs separate from the user-facing command contract.

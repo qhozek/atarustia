@@ -1,0 +1,6 @@
+# Removed upstream web UI: opt-in legacy extension only.
+ataraxia_web:
+  web_link: "🌐 <b>ataraxia web interface</b>\n\n<blockquote>🔗 <a href=\"{link}\">{url}</a></blockquote>\n\n<i>The link works once and for 5 minutes, don't forward it.</i>"
+$web:
+  confirm: "🔐 <b>ataraxia web interface login</b>\n\n<blockquote>🌐 <b>IP:</b> <code>{ip}</code>\n💻 <b>Browser:</b> {agent}</blockquote>\n\n<i>If it's not you, don't press the button: the request expires in 5 minutes.</i>"
+  confirm_btn: "🔓 Confirm login"

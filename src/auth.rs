@@ -53,8 +53,18 @@ pub async fn terminal_login(
     if phone.is_none()
         && let Some(session) = session
     {
-        let choice = prompt("Login: [1] phone, [2] QR [1]: ", false).await?;
-        if choice == "2" {
+        let choice = loop {
+            let choice = prompt(
+                "Sign in to Telegram\n1. QR code\n2. Phone number\nChoose 1-2, Enter for 1: ",
+                false,
+            )
+            .await?;
+            if matches!(choice.as_str(), "" | "1" | "2") {
+                break choice;
+            }
+            println!("Type the number of an option");
+        };
+        if choice != "2" {
             let login = Login::new(client.clone(), session, credentials.clone());
             login.start_qr().await?;
             let mut shown = String::new();

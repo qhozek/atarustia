@@ -2,4 +2,6 @@
 *.base64 text eol=lf
 # Preserve byte-for-byte copies of upstream frontend and language packs.
 web-resources/** -text
-locales/original/** -text
+locales/original/** -text whitespace=cr-at-eol
+locales/legacy/** -text
+assets/*.txt -text -whitespace

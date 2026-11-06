@@ -14,6 +14,9 @@ pub struct Options {
     pub data_root: PathBuf,
     #[arg(long)]
     pub no_web: bool,
+    /// Opt in to legacy web login; current Ataraxia uses terminal login.
+    #[arg(long, conflicts_with = "no_web")]
+    pub web: bool,
     #[arg(long, default_value = "127.0.0.1:8080")]
     pub listen: std::net::SocketAddr,
     #[arg(long, default_value = "default")]
@@ -40,7 +43,7 @@ pub struct Options {
     #[arg(long, short = 'p')]
     pub phone: Option<String>,
     /// Default Telegram Desktop API pair, or custom credentials entered in the terminal.
-    #[arg(long,default_value="ask",value_parser=["ask","tdesktop","custom"])]
+    #[arg(long,default_value="custom",value_parser=["ask","tdesktop","custom"])]
     pub api_preset: String,
     /// Offline import of encrypted binary v1 / legacy SQLite v6–v8 from a separate Python data directory.
     #[arg(long, conflicts_with = "import_backup")]
@@ -51,6 +54,11 @@ pub struct Options {
     /// Account owner for legacy backups (the old formats do not reliably encode it).
     #[arg(long, requires = "import_backup")]
     pub import_owner: Option<i64>,
+}
+impl Options {
+    pub fn web_enabled(&self) -> bool {
+        self.web && !self.no_web
+    }
 }
 pub fn desktop_credentials() -> Credentials {
     Credentials {

@@ -9,6 +9,7 @@ fn help_and_version_do_not_require_credentials() {
     for option in [
         "--data-root",
         "--no-web",
+        "--web",
         "--account",
         "--no-auth",
         "--allow-shell",
@@ -17,6 +18,18 @@ fn help_and_version_do_not_require_credentials() {
     }
     let version = Command::new(binary).arg("--version").output().unwrap();
     assert!(version.status.success());
+}
+#[test]
+fn terminal_and_own_api_pair_are_the_default_without_opening_a_listener() {
+    use clap::Parser;
+    let options = atarustia::config::Options::try_parse_from(["atarustia"]).unwrap();
+    assert!(!options.web_enabled());
+    assert_eq!(options.api_preset, "custom");
+    let legacy = atarustia::config::Options::try_parse_from(["atarustia", "--web"]).unwrap();
+    assert!(legacy.web_enabled());
+    assert!(
+        atarustia::config::Options::try_parse_from(["atarustia", "--web", "--no-web"]).is_err()
+    );
 }
 #[test]
 fn renamed_binary_and_env_names_are_used() {

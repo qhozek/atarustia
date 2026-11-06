@@ -3,6 +3,8 @@ atarustia — Telegram userbot in Rust, AGPL-3.0-only.
 The project includes work derived from Ataraxia maintained by xenside:
 https://git.break.wtf/xenside/ataraxia
 Base port snapshot: c2f80d91dcc3fe4c5f3e388f31cb3229a3b66dc3.
+Current-main command catalogue, language packs and terminal artwork target:
+122c2692391b1bfc40456270b7ff998c2ee10af8 (checked 2026-11-07).
 The web-resources/ frontend is copied byte-for-byte from snapshot
 a58e7019690abfec05e06b7383538fad39dc2d01 under the project's AGPL-3.0 license.
 assets/ataraxia.png, assets/bot_pfp.png and assets/ataraxia_backup.png are also

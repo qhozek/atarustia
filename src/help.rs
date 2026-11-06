@@ -154,14 +154,13 @@ pub fn core_group(name: &str) -> &'static str {
         "info" | "help" | "helphide" => crate::info::MODULE,
         "update" | "restart" | "source" => crate::update_ui::MODULE,
         "config" | "fconfig" => "ataraxiaConfig",
-        "weburl" | "addacc" => "ataraxiaWeb",
+        "addacc" => "ataraxiaAccounts",
         "backupall" | "backupdb" | "backupmods" | "restoreall" | "restoredb" | "restoremods"
         | "set_backup_period" => "ataraxiaBackup",
         "e" | "terminal" | "terminate" | "ec" | "ecpp" | "enode" => "Executor",
         "dlm" | "lm" | "ulm" | "ml" | "clearmodules" => "Loader",
-        "api_fw_protection" | "suspend_api_protect" => "APILimiter",
         "setlang" | "dllangpack" => "Translations",
-        "ping" | "logs" | "clearlogs" | "suspend" => "Tester",
+        "ping" | "logs" | "clearlogs" => "Tester",
         "ch_ataraxia_bot" | "ch_bot_token" => "InlineStuff",
         name if crate::security_commands::COMMANDS
             .iter()
