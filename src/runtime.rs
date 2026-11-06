@@ -326,6 +326,11 @@ pub async fn run_with_modules(
             events: Default::default(),
             maintenance: Default::default(),
             account: name.clone(),
+            accounts: crate::accounts::Accounts::new(
+                credentials.clone(),
+                key.clone(),
+                options.proxy.clone(),
+            ),
             forms: Default::default(),
             bot: Default::default(),
             jobs: Default::default(),
@@ -506,6 +511,7 @@ async fn account_loop(mut connection: Connection, context: Arc<Context>) -> Resu
     }.await;
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
+    context.accounts.shutdown().await;
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
         crate::module_lifecycle::shutdown(&context),

@@ -397,6 +397,7 @@ impl Fixture {
             events: Default::default(),
             maintenance: Default::default(),
             account: "test".into(),
+            accounts: Default::default(),
             forms: Default::default(),
             bot: Default::default(),
             jobs: Default::default(),

@@ -28,7 +28,7 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ("ch_bot_token", "<token> — заменить токен и перезапустить"),
     (
         "addacc",
-        "<slot> — добавить аккаунт через защищённый веб-вход",
+        "<user|reply> — добавить аккаунт через inline-вход",
     ),
     (
         "update",
@@ -120,6 +120,7 @@ pub struct Context {
     pub events: tokio::sync::Mutex<()>,
     pub maintenance: tokio::sync::Mutex<()>,
     pub account: String,
+    pub accounts: crate::accounts::Accounts,
     pub forms: Mutex<crate::forms::Forms>,
     pub bot: tokio::sync::RwLock<Option<crate::inline::BotHandle>>,
     pub jobs: crate::jobs::Jobs,
@@ -596,32 +597,7 @@ impl Context {
                 "Cancellation requested".into()
             }
             "addacc" => {
-                ensure!(
-                    m.peer_id().bot_api_dialog_id_unchecked() == self.owner,
-                    "addacc only in Saved Messages"
-                );
-                ensure!(
-                    self.web.is_some(),
-                    "restart without --no-web to add accounts"
-                );
-                crate::config::validate_account(args)?;
-                let _guard = self.maintenance.lock().await;
-                let mut config = crate::config::Config::load(&self.root)?;
-                ensure!(
-                    !config.accounts.contains_key(args),
-                    "account slot already exists"
-                );
-                config.accounts.insert(
-                    args.into(),
-                    crate::config::AccountConfig {
-                        needs_login: true,
-                        ..Default::default()
-                    },
-                );
-                config.save(&self.root)?;
-                telegram::answer(m,"Account slot created. Restarting; open a fresh one-time link from the terminal to authorize it.").await?;
-                self.db.set("RustRuntime", "restart", true)?;
-                self.stop.cancel();
+                crate::accounts::command(self, m, args).await?;
                 return Ok(None);
             }
             "ch_bot_token" => {

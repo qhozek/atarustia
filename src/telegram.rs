@@ -52,11 +52,29 @@ impl Connection {
         key: Arc<MasterKey>,
         proxy: Option<&str>,
     ) -> Result<Self> {
-        let mtproxy = proxy.map(validate_proxy).transpose()?.flatten();
         let session = Arc::new(EncryptedSession::load(
             root.join(format!("atarustia-{name}.atsession")),
             key,
         )?);
+        Self::with_session(session, credentials, proxy)
+    }
+    pub fn temporary(
+        credentials: &Credentials,
+        key: Arc<MasterKey>,
+        proxy: Option<&str>,
+    ) -> Result<Self> {
+        Self::with_session(
+            Arc::new(EncryptedSession::temporary(key)),
+            credentials,
+            proxy,
+        )
+    }
+    fn with_session(
+        session: Arc<EncryptedSession>,
+        credentials: &Credentials,
+        proxy: Option<&str>,
+    ) -> Result<Self> {
+        let mtproxy = proxy.map(validate_proxy).transpose()?.flatten();
         let params = grammers_client::sender::ConnectionParams {
             device_model: format!("atarustia Rust ({})", std::env::consts::ARCH),
             app_version: env!("CARGO_PKG_VERSION").into(),

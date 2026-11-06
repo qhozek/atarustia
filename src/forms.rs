@@ -10,6 +10,10 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
+    Account {
+        ticket: String,
+        operation: crate::accounts::Operation,
+    },
     Configure {
         state: crate::config_ui::State,
         operation: crate::config_ui::Operation,
@@ -427,6 +431,13 @@ impl Forms {
     }
     pub fn gate(&self, id: &str) -> Option<Gate> {
         self.units.get(id).and_then(|u| u.gate.clone())
+    }
+    pub(crate) fn allow_user(&mut self, id: &str, user: i64) -> Result<()> {
+        let unit = self.units.get_mut(id).context("form expired")?;
+        if !unit.allow.contains(&user) {
+            unit.allow.push(user);
+        }
+        Ok(())
     }
     pub fn bind_message(&mut self, id: &str, chat: i64, message: i32) {
         if let Some(unit) = self.units.get_mut(id) {

@@ -1624,7 +1624,11 @@ pub fn fast_config(
     Ok(updates.join("\n"))
 }
 
-async fn edit_unit(ctx: &crate::commands::Context, unit: &str, screen: Screen) -> Result<()> {
+pub(crate) async fn edit_unit(
+    ctx: &crate::commands::Context,
+    unit: &str,
+    screen: Screen,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         if ctx.forms.lock().unwrap().inline_id(unit).is_some() {

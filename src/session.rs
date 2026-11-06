@@ -125,14 +125,44 @@ struct State {
 }
 pub struct EncryptedSession {
     path: PathBuf,
+    persistent: bool,
     key: std::sync::Arc<MasterKey>,
     state: Mutex<State>,
 }
 impl EncryptedSession {
+    /// Login attempts must not leave even encrypted authorization files behind.
+    pub fn temporary(key: std::sync::Arc<MasterKey>) -> Self {
+        Self {
+            path: PathBuf::new(),
+            persistent: false,
+            key,
+            state: Mutex::new(State {
+                data: SessionData::default(),
+                dirty: false,
+            }),
+        }
+    }
+    /// Copy the authorized in-memory state directly into an encrypted final session.
+    /// create_new publication prevents replacing any pre-existing account file.
+    pub fn export(&self, path: &std::path::Path) -> Result<()> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("session lock poisoned"))?;
+        let plain = Zeroizing::new(serde_json::to_vec(&Snapshot::from_data(&state.data))?);
+        let encrypted = self.key.seal(&plain)?;
+        let parent = path.parent().context("session directory missing")?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        file.write_all(&encrypted)?;
+        file.as_file().sync_all()?;
+        file.persist_noclobber(path).map_err(|error| error.error)?;
+        Ok(())
+    }
     pub fn import(path: PathBuf, key: std::sync::Arc<MasterKey>, data: SessionData) -> Result<()> {
         ensure!(!path.exists(), "destination session already exists");
         let session = Self {
             path,
+            persistent: true,
             key,
             state: Mutex::new(State { data, dirty: true }),
         };
@@ -151,11 +181,15 @@ impl EncryptedSession {
         };
         Ok(Self {
             path,
+            persistent: true,
             key,
             state: Mutex::new(State { data, dirty: false }),
         })
     }
     pub fn flush(&self) -> Result<()> {
+        if !self.persistent {
+            return Ok(());
+        }
         let mut state = self
             .state
             .lock()
@@ -295,6 +329,38 @@ mod tests {
         std::fs::write(dir.path().join("a.atsession"), b"encrypted").unwrap();
         assert!(MasterKey::load(dir.path()).is_err());
         assert!(!dir.path().join("atarustia.key").exists());
+    }
+    #[tokio::test]
+    async fn account_export_is_encrypted_and_never_overwrites_an_existing_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = std::sync::Arc::new(MasterKey::load(dir.path()).unwrap());
+        let session =
+            EncryptedSession::load(dir.path().join("temporary.atsession"), key.clone()).unwrap();
+        session.set_home_dc_id(4).await.unwrap();
+        let final_path = dir.path().join("account.atsession");
+        session.export(&final_path).unwrap();
+        let original = std::fs::read(&final_path).unwrap();
+        assert!(original.starts_with(MAGIC));
+        assert_eq!(
+            EncryptedSession::load(final_path.clone(), key)
+                .unwrap()
+                .home_dc_id()
+                .unwrap(),
+            4
+        );
+        assert!(session.export(&final_path).is_err());
+        assert_eq!(std::fs::read(final_path).unwrap(), original);
+    }
+    #[tokio::test]
+    async fn temporary_login_never_persists_before_explicit_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = std::sync::Arc::new(MasterKey::load(dir.path()).unwrap());
+        let session = EncryptedSession::temporary(key);
+        session.set_home_dc_id(4).await.unwrap();
+        session.flush().unwrap();
+        drop(session);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(dir.path().join("atarustia.key").is_file());
     }
     #[tokio::test]
     async fn persistence() {

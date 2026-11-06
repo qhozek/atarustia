@@ -13,7 +13,8 @@
   и предварительного upload bytes. Guest hydration и document thumbnails неполны.
 - Не все новые layer-specific payloads представлены объектами. Passport credentials намеренно не копируются в JSON.
 - Импорт SQLite поддерживает v6–v8; старые/нестандартные схемы и WAL без checkpoint отклоняются. Legacy file ID v2 нет.
-- `.e` выполняет Rhai, `.addacc` создаёт web-login slot. Legacy SUDO/SUPPORT не поддерживаются.
+- `.e` выполняет Rhai. `.addacc` использует inline login с in-memory попытками; live-приёмка
+  phone/code/2FA/chosen-result пока не выполнена. Legacy SUDO/SUPPORT не поддерживаются.
 
 MTProxy classic/dd/ee, rich messages и media/DC операции имеют локальные тесты. Авторизация на реальном аккаунте,
 BotFather, длительные media transfers, группы/Premium emoji и несколько живых аккаунтов требуют отдельной проверки.

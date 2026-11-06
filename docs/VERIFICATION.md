@@ -8,6 +8,12 @@ case-insensitive legacy aliases, unknown RTT и чередования update bu
 Отдельный synthetic Cargo project проверяет ошибку линковки до shutdown (не только type-check).
 Вход, визуальное совпадение Telegram и реальный self-update этим не подтверждаются.
 
+Accounts (2026-11-07): offline tests проверяют labels RU/EN и native-only actions,
+target/TTL/token rotation, replaced attempts/shutdown, обработку synthetic chosen-result
+с неверным target и replay, in-memory sessions, encrypted export без перезаписи,
+публикацию config/session и cleanup при failed config write. Вход phone/code/2FA с реальным
+Telegram, успешная доставка chosen-result и перезапуск после него ещё не проверены.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings

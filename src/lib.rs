@@ -1,4 +1,5 @@
 pub mod access;
+pub mod accounts;
 pub mod api_protection;
 pub mod assets;
 pub mod auth;

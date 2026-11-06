@@ -16,15 +16,24 @@ impl BotHandle {
         message: &grammers_client::message::Message,
         screen: crate::forms::Screen,
     ) -> Result<()> {
+        self.form_with_allow(context, message, screen, vec![])
+            .await
+            .map(|_| ())
+    }
+    pub(crate) async fn form_with_allow(
+        &self,
+        context: &Context,
+        message: &grammers_client::message::Message,
+        screen: crate::forms::Screen,
+        extra_allow: Vec<i64>,
+    ) -> Result<String> {
         let owner = message
             .sender_id()
             .map(|s| s.bare_id_unchecked())
             .unwrap_or(context.owner);
-        let (id, _body) = context.forms.lock().unwrap().create(
-            screen,
-            owner,
-            security::owners(&context.db, context.owner),
-        )?;
+        let mut allow = security::owners(&context.db, context.owner);
+        allow.extend(extra_allow);
+        let (id, _body) = context.forms.lock().unwrap().create(screen, owner, allow)?;
         if let crate::dispatcher::Parsed::Command { name, args } = crate::dispatcher::parse(
             message.text(),
             &context.db.prefix_for(Some(owner), context.owner),
@@ -156,7 +165,7 @@ impl BotHandle {
             // Config/settings replace the owner's command, as the original form does.
             let _ = message.delete().await;
         }
-        Ok(())
+        Ok(id)
     }
 }
 
@@ -281,6 +290,10 @@ async fn run_inner(
     connection.close().await
 }
 async fn handle(context: &Context, update: Update) -> Result<()> {
+    // Consume login inputs before module/native watchers: never expose codes or passwords.
+    if crate::accounts::handle_update(context, &update).await? {
+        return Ok(());
+    }
     if crate::config_ui::handle_bot_update(context, &update).await? {
         return Ok(());
     }
@@ -546,6 +559,10 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         .bind_inline(&click.unit, crate::file_id::encode_inline_id(&raw.msg_id));
                 }
                 use crate::forms::Action;
+                if let Action::Account { ticket, operation } = &click.action {
+                    return crate::accounts::callback(context, &q, &click.unit, ticket, *operation)
+                        .await;
+                }
                 if matches!(
                     click.action,
                     Action::Configure { .. }
@@ -614,6 +631,9 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     }
                 }
                 let message = match click.action {
+                    Action::Account { .. } => {
+                        unreachable!("account actions were handled before delegation")
+                    }
                     Action::Configure { state, operation } => {
                         anyhow::ensure!(
                             owners.contains(&q.sender_id().bare_id_unchecked()),
