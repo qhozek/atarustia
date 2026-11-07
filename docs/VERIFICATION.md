@@ -2,6 +2,12 @@
 
 Локальная среда: Windows x86_64, Rust 1.99.1 GNU. Проверки выполняются без Telegram credentials.
 
+P0.1 v2: `work_queue` tests проверяют burst >32 без потерь при доступном consumer,
+bounded concurrency/backpressure, отмену полного backlog, periodic coalescing/panic и reserved
+delivery при занятых regular workers. Inline routing отдельно проверяется на исключение
+account/config inputs из reserved lane. Vendor sender backlog test — bounded overflow error.
+Это не доказательство durable exactly-once или live Telegram recovery; [границы](EVENT_QUEUES.md).
+
 Cargo startup regression: проверены поиск executable через existing fallback, явный ошибочный
 `CARGO`, отсутствие программы/checkout/Cargo.toml и actionable errors. Служба пользователя
 и её реальный PATH/права требуют проверки на целевой машине; это не ошибка dependency resolver.

@@ -6,6 +6,11 @@ The application uses `[patch.crates-io]` so `grammers-client` and direct users s
 
 Changes:
 
+- Bounded update backpressure: up to 4096 pending envelopes per DC sender while RPC I/O
+  continues. The old try_send/full drop path is removed. A full backlog raises
+  UpdateBacklogExceeded and stops the pool explicitly, closing the update stream;
+  no silent reconnect/replay or claim of durable exactly-once delivery.
+
 - `mtproxy.rs`: native client MTProxy config, classic abridged/intermediate, dd padded intermediate,
   ee Fake TLS with SNI, authenticated hello and TLS-like record wrapping, obfuscated2 AES-CTR.
 - `ConnectionParams.mtproxy`, `ServerAddr::MtProxy`, pool transport selection and initConnection proxy info.

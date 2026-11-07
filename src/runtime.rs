@@ -469,17 +469,27 @@ async fn account_loop(mut connection: Connection, context: Arc<Context>) -> Resu
     let mut module_updates = tokio::time::interval(Duration::from_secs(1800));
     let mut logs_tick = tokio::time::interval(Duration::from_secs(30));
     let mut log_hash = String::new();
-    let mut tasks = tokio::task::JoinSet::new();
+    let mut tasks = crate::work_queue::WorkQueue::new("account", 32, 256, &context.stop);
     let mut loop_tick = tokio::time::interval(Duration::from_secs(1));
+    // Do not replay an accumulated burst of timer ticks after backpressure.
+    for timer in [
+        &mut flush,
+        &mut backups,
+        &mut module_updates,
+        &mut logs_tick,
+        &mut loop_tick,
+    ] {
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    }
     let mut scheduler = crate::scheduler::Scheduler::default();
     crate::module_lifecycle::startup(&context).await;
     let run_result = async {
     loop {
         tokio::select! {
             _=context.stop.cancelled()=>break,
-            _=logs_tick.tick()=>{if context.db.get("RustLogs","telegram").as_bool().unwrap_or(false){let bytes=context.logs.snapshot();let text=context.logs.redact(String::from_utf8_lossy(&bytes).to_string());let errors=text.lines().filter(|l|l.contains("ERROR")||l.contains("WARN")).collect::<Vec<_>>().join("\n");let hash=crate::modules::digest(errors.as_bytes());if !errors.is_empty()&&hash!=log_hash{log_hash=hash;let ctx=context.clone();tasks.spawn(async move{if let Ok(Some((peer,topic)))=crate::content::topic_destination(&ctx.client,&ctx.db,"Logs").await{let tail:String=errors.chars().rev().take(3000).collect::<String>().chars().rev().collect();let _=ctx.client.send_message(peer,grammers_client::message::InputMessage::new().text(tail).reply_to(Some(topic))).await;}});}}},
-            _=module_updates.tick()=>{let packages=context.modules.lock().unwrap().export();let ctx=context.clone();tasks.spawn(async move{for (name,url,package) in Registry::updates(packages).await{let hash=match ctx.modules.lock().unwrap().stage(package){Ok(hash)=>hash,Err(_)=>continue};let notified=ctx.db.get("RustModuleUpdates",&name);if notified.as_str()==Some(&hash){continue;}let text=format!("Module update: {name}\n{url}\n{}dlm {url}",ctx.db.prefix());if ctx.client.send_message(grammers_session::types::PeerId::self_user().to_ambient_ref(),text).await.is_ok(){let _=ctx.db.set("RustModuleUpdates",&name,hash);}}});},
-            _=loop_tick.tick()=>{if let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let ctx=context.clone();tasks.spawn(async move {let _permit=permit;crate::module_lifecycle::poll_config_changes(&ctx).await;});}let packages=context.modules.lock().unwrap().export();for (package,task) in scheduler.due(&packages,&context.db){if let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let ctx=context.clone();tasks.spawn(async move{let _permit=permit;let name=package.manifest.name.clone();if let Err(e)=ctx.run_loop(package,task).await{crate::module_lifecycle::report(&ctx,&name,"loop",&e);}});}}},
+            _=logs_tick.tick()=>{if context.db.get("RustLogs","telegram").as_bool().unwrap_or(false){let bytes=context.logs.snapshot();let text=context.logs.redact(String::from_utf8_lossy(&bytes).to_string());let errors=text.lines().filter(|l|l.contains("ERROR")||l.contains("WARN")).collect::<Vec<_>>().join("\n");let hash=crate::modules::digest(errors.as_bytes());if !errors.is_empty()&&hash!=log_hash{log_hash=hash;let ctx=context.clone();tasks.submit(async move{if let Ok(Some((peer,topic)))=crate::content::topic_destination(&ctx.client,&ctx.db,"Logs").await{let tail:String=errors.chars().rev().take(3000).collect::<String>().chars().rev().collect();let _=ctx.client.send_message(peer,grammers_client::message::InputMessage::new().text(tail).reply_to(Some(topic))).await;}}).await;}}},
+            _=module_updates.tick()=>{let packages=context.modules.lock().unwrap().export();let ctx=context.clone();tasks.submit_unique("module-updates".into(),async move{for (name,url,package) in Registry::updates(packages).await{let hash=match ctx.modules.lock().unwrap().stage(package){Ok(hash)=>hash,Err(_)=>continue};let notified=ctx.db.get("RustModuleUpdates",&name);if notified.as_str()==Some(&hash){continue;}let text=format!("Module update: {name}\n{url}\n{}dlm {url}",ctx.db.prefix());if ctx.client.send_message(grammers_session::types::PeerId::self_user().to_ambient_ref(),text).await.is_ok(){let _=ctx.db.set("RustModuleUpdates",&name,hash);}}}).await;},
+            _=loop_tick.tick()=>{let ctx=context.clone();tasks.submit_unique("config-changes".into(),async move {crate::module_lifecycle::poll_config_changes(&ctx).await;}).await;let packages=context.modules.lock().unwrap().export();for (package,task) in scheduler.due(&packages,&context.db){let key=format!("loop:{}:{}:{}",package.manifest.name,package.revision(),task.function);let ctx=context.clone();tasks.submit_unique(key,async move{let name=package.manifest.name.clone();if let Err(e)=ctx.run_loop(package,task).await{crate::module_lifecycle::report(&ctx,&name,"loop",&e);}}).await;}},
             _=flush.tick()=>{connection.session.flush()?;},
             _=backups.tick()=>{
                 let hours=context.db.get("RustBackup","hours").as_u64().unwrap_or(0);
@@ -488,29 +498,27 @@ async fn account_loop(mut connection: Connection, context: Arc<Context>) -> Resu
                     let bytes={let modules=context.modules.lock().unwrap();backup::create(&context.db,&modules,context.owner)?};
                     backup::local(&context.root,&bytes,context.owner)?;
                     context.db.set("RustBackup","last",crate::security::now())?;
-                    let ctx=context.clone();tasks.spawn(async move{if let Err(e)=crate::telegram::send_backup(&ctx.client,&ctx.db,bytes,"Scheduled confidential backup").await{tracing::warn!(error=%e,"backup upload failed; local copy saved");}});
+                    let ctx=context.clone();tasks.submit(async move{if let Err(e)=crate::telegram::send_backup(&ctx.client,&ctx.db,bytes,"Scheduled confidential backup").await{tracing::warn!(error=%e,"backup upload failed; local copy saved");}}).await;
                 }
             },
             update=updates.next()=>{
                 let update=update?;
-                for module in context.native.list(){if let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let services=context.services();let update=update.clone();tasks.spawn(async move{let _permit=permit;if let Err(e)=module.update(&services,&update).await{tracing::warn!(module=module.name(),error=%e,"native update failed");}});}}
-                let (message,edited)=match update {Update::NewMessage(m)=>(Some(m),false),Update::MessageEdited(m)=>(Some(m),true),Update::Raw(raw)=>{let ctx=context.clone();let event=crate::modules::Event{text:format!("{:?}",raw.raw).chars().take(16384).collect(),chat:ctx.owner,sender:Some(ctx.owner),outgoing:false,command:false,edited:false,id:0,kind:"raw".into(),data:serde_json::Value::Null,..Default::default()};if let Ok(permit)=ctx.semaphore.clone().try_acquire_owned(){tasks.spawn(async move{let _permit=permit;if let Err(e)=ctx.handle_event(event).await{tracing::warn!(error=%e,"raw watcher failed");}});}(None,false)},_=>(None,false)};
-                if let Some(m)=message && let Ok(permit)=context.semaphore.clone().try_acquire_owned(){let ctx=context.clone();tasks.spawn(async move{
-                    let _permit=permit;let m=m.into_inner();
+                for module in context.native.list(){let services=context.services();let update=update.clone();tasks.submit(async move{if let Err(e)=module.update(&services,&update).await{tracing::warn!(module=module.name(),error=%e,"native update failed");}}).await;}
+                let (message,edited)=match update {Update::NewMessage(m)=>(Some(m),false),Update::MessageEdited(m)=>(Some(m),true),Update::Raw(raw)=>{let ctx=context.clone();let event=crate::modules::Event{text:format!("{:?}",raw.raw).chars().take(16384).collect(),chat:ctx.owner,sender:Some(ctx.owner),outgoing:false,command:false,edited:false,id:0,kind:"raw".into(),data:serde_json::Value::Null,..Default::default()};tasks.submit(async move{if let Err(e)=ctx.handle_event(event).await{tracing::warn!(error=%e,"raw watcher failed");}}).await;(None,false)},_=>(None,false)};
+                if let Some(m)=message {let ctx=context.clone();tasks.submit(async move{
+                    let m=m.into_inner();
                     let converted=crate::botapi::Message::from_native(&m);
                     let mut event=crate::modules::Event{text:m.text().into(),chat:m.peer_id().bot_api_dialog_id_unchecked(),sender:m.sender_id().filter(|s|s.kind()==grammers_session::types::PeerKind::User).map(|s|s.bare_id_unchecked()),outgoing:m.outgoing(),command:matches!(crate::dispatcher::parse(m.text(),&ctx.db.prefix(),ctx.username.as_deref(),m.outgoing()),crate::dispatcher::Parsed::Command{..}),edited,id:m.id(),kind:"message".into(),data:serde_json::to_value(&converted).unwrap_or_default(),..Default::default()};
                     event.enrich_from_botapi(&converted);
                     if let Err(e)=ctx.handle_event(event).await{tracing::warn!(error=%e,"watcher failed");}
                     if let Err(e)=ctx.handle(m,edited).await {tracing::warn!(error=%crate::output::censor(e.to_string(),&ctx.secrets),"dispatch failed");}
-                });}
+                }).await;}
             },
-            Some(result)=tasks.join_next(),if !tasks.is_empty()=>{if let Err(e)=result{tracing::error!(error=%e,"handler panicked");}}
         }
     }
     Ok::<_,anyhow::Error>(())
     }.await;
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
+    tasks.shutdown().await;
     context.accounts.shutdown().await;
     let _ = tokio::time::timeout(
         Duration::from_secs(5),
@@ -519,7 +527,6 @@ async fn account_loop(mut connection: Connection, context: Arc<Context>) -> Resu
     .await;
     context.native.unload(&context.services()).await;
     context.jobs.cancel_all();
-    while tasks.join_next().await.is_some() {}
     let sync_result = updates
         .sync_update_state()
         .await

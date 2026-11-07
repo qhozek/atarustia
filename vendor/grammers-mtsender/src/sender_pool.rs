@@ -10,7 +10,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use std::num::NonZeroU32;
 use std::ops::{ControlFlow, Deref};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{fmt, panic};
 
 use grammers_mtproto::{mtp, transport};
@@ -25,14 +25,15 @@ use tokio::{
     task::JoinSet,
     time::sleep,
 };
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::configuration::{ConnectionParams, RetryContext};
 use crate::errors::{InvocationError, ReadError};
 use crate::{Sender, ServerAddr, connect, connect_with_auth};
 
-/// How long to wait after warning the user that the updates was dropped.
-const UPDATES_DROPPED_LOG_COOLDOWN: Duration = Duration::from_secs(300);
+// Keep driving RPC while a bounded update consumer is backpressured. Waiting
+// inline on send() here would deadlock handlers awaiting an RPC response.
+const UPDATE_BACKLOG_LIMIT: usize = 4096;
 
 pub(crate) type Transport = crate::mtproxy::PoolTransport;
 
@@ -297,7 +298,13 @@ impl SenderPoolRunner {
             tokio::select! {
                 biased;
                 completion = self.connection_pool.join_next(), if !self.connection_pool.is_empty() => {
-                    if let Err(err) = completion.unwrap()
+                    let completion=completion.unwrap();
+                    if matches!(&completion,Ok(Err(ReadError::UpdateBacklogExceeded))) {
+                        warn!("update backlog exhausted; stopping pool and closing consumer stream; no automatic replay");
+                        self.connection_pool.abort_all();
+                        break;
+                    }
+                    if let Err(err) = completion
                         && let Ok(reason) = err.try_into_panic()
                     {
                         panic::resume_unwind(reason);
@@ -320,7 +327,13 @@ impl SenderPoolRunner {
         }
 
         self.connections.clear(); // drop all channels to cause the `run_sender` loops to stop
-        self.connection_pool.join_all().await;
+        while let Some(result) = self.connection_pool.join_next().await {
+            if let Err(error) = result
+                && let Ok(reason) = error.try_into_panic()
+            {
+                panic::resume_unwind(reason);
+            }
+        }
     }
 
     async fn process_request(&mut self, request: Request) -> ControlFlow<()> {
@@ -557,40 +570,24 @@ async fn run_sender(
     updates: mpsc::Sender<UpdatesLike>,
     home_sender: bool,
 ) -> Result<(), ReadError> {
-    let mut dropped: usize = 0;
-    let mut last_update_limit_warn = Instant::now();
+    let mut pending = std::collections::VecDeque::new();
     let mut updates_closed = false;
 
     loop {
         tokio::select! {
+            permit = updates.reserve(), if !pending.is_empty() && !updates_closed => {
+                match permit {
+                    Ok(permit) => permit.send(pending.pop_front().expect("pending update")),
+                    Err(_) => { pending.clear(); updates_closed = true; }
+                }
+            }
             step = sender.step() => match step {
                 Ok(all_new_updates) => {
                     if updates_closed {
                         continue;
                     }
                     for new_updates in all_new_updates {
-                        if let Err(e) = updates.try_send(new_updates) {
-                            match e {
-                                mpsc::error::TrySendError::Full(_) => {
-                                    dropped += 1;
-                                    if last_update_limit_warn.elapsed() >= UPDATES_DROPPED_LOG_COOLDOWN {
-                                        warn!(
-                                            capacity = updates.max_capacity(),
-                                            dropped_count = dropped,
-                                            last_time = ?last_update_limit_warn.elapsed(),
-                                            "updates channel full",
-                                        );
-                                        dropped = 0;
-                                        last_update_limit_warn = Instant::now();
-                                    }
-                                }
-                                mpsc::error::TrySendError::Closed(_) => {
-                                    debug!("updates channel closed, stopping update forwarding");
-                                    updates_closed = true;
-                                    break;
-                                }
-                            }
-                        }
+                        enqueue_update(&mut pending,new_updates)?;
                     }
                 },
                 Err(err) => {
@@ -606,6 +603,21 @@ async fn run_sender(
             },
         }
     }
+}
+
+fn enqueue_update(
+    pending: &mut std::collections::VecDeque<UpdatesLike>,
+    update: UpdatesLike,
+) -> Result<(), ReadError> {
+    if pending.len() >= UPDATE_BACKLOG_LIMIT {
+        warn!(
+            capacity = UPDATE_BACKLOG_LIMIT,
+            "MTProto update backlog exhausted; connection fails explicitly, updates must not be silently dropped"
+        );
+        return Err(ReadError::UpdateBacklogExceeded);
+    }
+    pending.push_back(update);
+    Ok(())
 }
 
 impl fmt::Debug for Request {
@@ -640,5 +652,49 @@ impl fmt::Debug for Request {
             }
             Self::Quit => write!(f, "Quit"),
         }
+    }
+}
+
+#[cfg(test)]
+mod update_backlog_tests {
+    use super::*;
+    #[tokio::test]
+    async fn backpressure_keeps_fifo_bounded_and_overflow_is_explicit() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut pending = std::collections::VecDeque::new();
+        for id in 0..64 {
+            enqueue_update(
+                &mut pending,
+                UpdatesLike::Updates(
+                    tl::types::UpdateShort {
+                        update: tl::enums::Update::LoginToken,
+                        date: id,
+                    }
+                    .into(),
+                ),
+            )
+            .unwrap();
+        }
+        for id in 0..64 {
+            tx.reserve()
+                .await
+                .unwrap()
+                .send(pending.pop_front().unwrap());
+            let UpdatesLike::Updates(tl::enums::Updates::UpdateShort(update)) =
+                rx.recv().await.unwrap()
+            else {
+                panic!("expected short update")
+            };
+            assert_eq!(update.date, id);
+        }
+        assert!(pending.is_empty());
+        for _ in 0..UPDATE_BACKLOG_LIMIT {
+            enqueue_update(&mut pending, UpdatesLike::ConnectionClosed).unwrap();
+        }
+        assert!(matches!(
+            enqueue_update(&mut pending, UpdatesLike::ConnectionClosed),
+            Err(ReadError::UpdateBacklogExceeded)
+        ));
+        assert_eq!(pending.len(), UPDATE_BACKLOG_LIMIT);
     }
 }

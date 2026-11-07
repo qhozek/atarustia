@@ -6,6 +6,8 @@
 Bridge и обратный экспорт ещё не реализованы; ниже описаны существующие Rust-подсистемы.
 
 - `runtime` — запуск аккаунтов, фоновые задачи, завершение и перезапуск.
+- `work_queue` — bounded admission, backpressure/coalescing/cancellation и reserved inline delivery.
+  Политика переполнения и границы гарантий: [EVENT_QUEUES.md](EVENT_QUEUES.md).
 - `setup`, `auth`, `web` — выбор API-пары, номер/код/2FA/QR и локальный веб-мастер.
 - `session`, `storage`, `database` — AES-GCM сессии, атомарная запись и блокировка каталога.
 - `dispatcher`, `security`, `access` — разбор команд, владельцы, группы и Telegram admin rights.

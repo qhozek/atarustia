@@ -69,3 +69,4 @@ pub mod update_ui;
 pub mod updater;
 pub mod validators;
 pub mod web;
+pub mod work_queue;

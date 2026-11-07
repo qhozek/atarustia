@@ -266,30 +266,81 @@ async fn run_inner(
         .await
         .map_err(anyhow::Error::from_boxed)?;
     let mut flush = tokio::time::interval(Duration::from_secs(5));
-    let mut handlers = tokio::task::JoinSet::new();
-    let permits = Arc::new(tokio::sync::Semaphore::new(32));
+    let mut handlers = crate::work_queue::WorkQueue::new("inline", 32, 256, &context.stop);
+    let mut delivery = crate::work_queue::WorkQueue::new("inline-delivery", 4, 64, &context.stop);
+    let run_result = async {
     loop {
         tokio::select! {
             _=context.stop.cancelled()=>break,
             _=flush.tick()=>{connection.session.flush()?;context.forms.lock().unwrap().clean();},
             update=updates.next()=>{
                 let update=update?;
-                if let Ok(permit)=permits.clone().try_acquire_owned(){let ctx=context.clone();handlers.spawn(async move{let _permit=permit;if let Err(e)=handle(&ctx,update).await {tracing::warn!(error=%crate::output::censor(e.to_string(),&ctx.secrets),"inline handler failed");}});}
+                let ctx=context.clone();
+                if is_delivery_update(&update) {
+                    delivery.try_submit(async move {if handle_delivery(&ctx,&update).await.is_err(){tracing::warn!("inline delivery failed");}})?;
+                } else {
+                    handlers.try_submit(async move {if let Err(e)=handle(&ctx,update).await {tracing::warn!(error=%crate::output::censor(e.to_string(),&ctx.secrets),"inline handler failed");}})?;
+                }
             }
-            Some(result)=handlers.join_next(),if !handlers.is_empty()=>{if let Err(e)=result{tracing::warn!(error=%e,"inline task failed");}}
         }
     }
+    Ok::<_,anyhow::Error>(())
+    }.await;
+    delivery.shutdown().await;
+    handlers.shutdown().await;
     *context.bot.write().await = None;
-    handlers.abort_all();
-    while handlers.join_next().await.is_some() {}
-    updates
+    let sync_result = updates
         .sync_update_state()
         .await
-        .map_err(anyhow::Error::from_boxed)?;
+        .map_err(anyhow::Error::from_boxed);
     drop(updates);
-    connection.close().await
+    let close_result = connection.close().await;
+    run_result.and(sync_result).and(close_result)
+}
+fn is_delivery_update(update: &Update) -> bool {
+    is_delivery_raw(update.raw())
+}
+fn is_delivery_raw(update: &grammers_client::tl::enums::Update) -> bool {
+    use grammers_client::tl::enums::Update as Raw;
+    match update {
+        Raw::BotInlineQuery(query) => query.query.starts_with("unit:"),
+        Raw::BotInlineSend(sent) => sent.query.starts_with("unit:"),
+        _ => false,
+    }
+}
+/// Only form transport, never callbacks/module hooks/config changes, can use
+/// reserved workers. Every query still verifies the current owner allow-list.
+async fn handle_delivery(context: &Context, update: &Update) -> Result<bool> {
+    if let Update::InlineQuery(query) = update
+        && let Some(unit) = query.text().strip_prefix("unit:")
+    {
+        let owners = security::owners(&context.db, context.owner);
+        let results = if owners.contains(&query.sender_id().bare_id_unchecked()) {
+            context
+                .forms
+                .lock()
+                .unwrap()
+                .inline_result(unit)
+                .map(|r| vec![r])
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+        query.answer(results).private().cache_time(0).send().await?;
+        return Ok(true);
+    }
+    if matches!(update.raw(),grammers_client::tl::enums::Update::BotInlineSend(sent) if sent.query.starts_with("unit:"))
+    {
+        let _ = crate::config_ui::handle_bot_update(context, update).await?;
+        // Forged/unrecognized unit acks must not reach module watchers either.
+        return Ok(true);
+    }
+    Ok(false)
 }
 async fn handle(context: &Context, update: Update) -> Result<()> {
+    if handle_delivery(context, &update).await? {
+        return Ok(());
+    }
     // Consume login inputs before module/native watchers: never expose codes or passwords.
     if crate::accounts::handle_update(context, &update).await? {
         return Ok(());
@@ -353,26 +404,6 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
         } else {
             query.answer().alert("403").send().await?;
         }
-        return Ok(());
-    }
-    // Form delivery waits for its inline query while the originating module owns
-    // the events lock. Route this internal query before any module watcher.
-    if let Update::InlineQuery(query) = &update
-        && let Some(unit) = query.text().strip_prefix("unit:")
-    {
-        let owners = security::owners(&context.db, context.owner);
-        let results = if owners.contains(&query.sender_id().bare_id_unchecked()) {
-            context
-                .forms
-                .lock()
-                .unwrap()
-                .inline_result(unit)
-                .map(|r| vec![r])
-                .unwrap_or_default()
-        } else {
-            vec![]
-        };
-        query.answer(results).private().cache_time(0).send().await?;
         return Ok(());
     }
     for module in context.native.list() {
@@ -1127,4 +1158,44 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod queue_routing_tests {
+    use super::*;
+    #[test]
+    fn only_form_delivery_queries_and_acks_use_reserved_workers() {
+        let query = |text: &str| {
+            grammers_client::tl::types::UpdateBotInlineQuery {
+                query_id: 1,
+                user_id: 42,
+                query: text.into(),
+                geo: None,
+                peer_type: None,
+                offset: String::new(),
+            }
+            .into()
+        };
+        let chosen = |text: &str| {
+            grammers_client::tl::types::UpdateBotInlineSend {
+                user_id: 42,
+                query: text.into(),
+                geo: None,
+                id: "result".into(),
+                msg_id: None,
+            }
+            .into()
+        };
+        assert!(is_delivery_raw(&query("unit:opaque")));
+        assert!(is_delivery_raw(&chosen("unit:opaque")));
+        for text in [
+            "help",
+            "account-input:secret",
+            "ci:config-value",
+            "notunit:opaque",
+        ] {
+            assert!(!is_delivery_raw(&query(text)), "{text}");
+            assert!(!is_delivery_raw(&chosen(text)), "{text}");
+        }
+    }
 }

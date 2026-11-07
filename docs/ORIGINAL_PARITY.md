@@ -21,6 +21,14 @@ Manifest фиксирует требования, включая ещё не п�
 
 ## Переход на текущую main — этап 1
 
+### P0.1 плана v2 — event admission
+
+Добавлены bounded account/inline queues и reserved form-delivery lane вместо silent
+try-acquire drops; periodic work coalesces. MTProto sender буферизует ограниченный backlog,
+не блокируя RPC. Saturation сверх inline/transport limits — явная ошибка, не unlimited delivery.
+Shutdown учитывает отменённые jobs, но не даёт durable/exactly-once replay.
+[Пределы, семантика и проверки](EVENT_QUEUES.md). Live load/recovery не проверены.
+
 - Каталог: 66 команд и 13 core-модулей, `addacc` принадлежит `ataraxiaAccounts`.
   Удалены из публичного реестра `weburl`, `suspend`, `api_fw_protection`, `suspend_api_protect`.
 - RU/EN YAML и terminal assets синхронизированы побайтово с указанной ревизией; hashes закреплены тестом.
@@ -31,7 +39,7 @@ Manifest фиксирует требования, включая ещё не п�
 - Updater полностью собирает и линкует alternate executable до shutdown; plain restart использует текущий exe.
 
 **Не завершено:** live-приёмка inline `.addacc`, widget API, все security/loader/backup/eval
-контракты, единая external translation chain, остальные конфиги/validators, backpressure и live UI-приёмка.
+контракты, единая external translation chain, остальные конфиги/validators, live load/recovery и UI-приёмка.
 Ни этот этап, ни успешные локальные тесты не означают 1:1. Дальнейшие разделы описывают уже перенесённые
 части старого снимка; не считать сохранённые legacy web resources частью текущего оригинала.
 

@@ -63,7 +63,9 @@ pub struct ConnectionParams {
     /// Maximum number of updates that can be buffered in the internal channel
     /// between the network senders and the updates receiver.
     ///
-    /// When the channel is full, newly received updates are **dropped**.
+    /// When the channel is full, the Atarustia patch buffers up to 4096 update
+    /// envelopes per sender while still driving RPC. Exhaustion fails the
+    /// connection explicitly instead of silently dropping incoming updates.
     pub updates_channel_capacity: NonZeroUsize,
 
     #[doc(hidden)]

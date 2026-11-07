@@ -16,3 +16,4 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
       - run: cargo test --locked -p grammers-mtsender --features proxy --lib mtproxy::tests
+      - run: cargo test --locked -p grammers-mtsender --features proxy --lib update_backlog_tests

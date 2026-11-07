@@ -20,6 +20,8 @@ pub enum ReadError {
     Transport(transport::Error),
     /// Error propagated from attempting to deserialize an invalid [`tl::Deserializable`].
     Deserialize(mtp::DeserializeError),
+    /// Local bounded update backlog was exhausted; consumers must restart explicitly.
+    UpdateBacklogExceeded,
 }
 
 impl std::error::Error for ReadError {}
@@ -34,6 +36,7 @@ impl Clone for ReadError {
             ),
             Self::Transport(e) => Self::Transport(e.clone()),
             Self::Deserialize(e) => Self::Deserialize(e.clone()),
+            Self::UpdateBacklogExceeded => Self::UpdateBacklogExceeded,
         }
     }
 }
@@ -44,6 +47,10 @@ impl fmt::Display for ReadError {
             Self::Io(err) => write!(f, "read error, IO failed: {err}"),
             Self::Transport(err) => write!(f, "read error, transport-level: {err}"),
             Self::Deserialize(err) => write!(f, "read error, bad response: {err}"),
+            Self::UpdateBacklogExceeded => write!(
+                f,
+                "MTProto update backlog exhausted; sender pool stopped rather than silently dropping updates"
+            ),
         }
     }
 }
@@ -272,6 +279,9 @@ impl From<ReadError> for InvocationError {
             ReadError::Io(error) => Self::from(error),
             ReadError::Transport(error) => Self::from(error),
             ReadError::Deserialize(error) => Self::from(error),
+            ReadError::UpdateBacklogExceeded => {
+                Self::from(io::Error::other("MTProto update backlog exhausted"))
+            }
         }
     }
 }
