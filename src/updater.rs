@@ -226,7 +226,22 @@ async fn run(
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    let mut child = command.spawn()?;
+    ensure!(
+        root.is_dir(),
+        "process working directory does not exist: {}",
+        root.display()
+    );
+    let program = command
+        .as_std()
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "cannot start {program} in {}; check executable, PATH and permissions",
+            root.display()
+        )
+    })?;
     #[cfg(windows)]
     let _job = crate::commands::WindowsJob::attach(&child)?;
     let _group = crate::commands::ProcessGroup(child.id());
@@ -264,15 +279,95 @@ async fn run(
         .context("update process timed out")?
 }
 pub async fn sync(root: &Path) -> Result<()> {
+    ensure!(
+        root.is_dir(),
+        "update checkout directory does not exist: {}",
+        root.display()
+    );
+    ensure!(
+        root.join("Cargo.toml").is_file(),
+        "update checkout has no Cargo.toml: {}",
+        root.display()
+    );
     let target = build_directory(root);
-    let mut command = tokio::process::Command::new("cargo");
+    let cargo = cargo_path()?;
+    let mut command = tokio::process::Command::new(&cargo);
+    // Services and direct executable restarts may omit ~/.cargo/bin from PATH.
+    // Add the selected Cargo directory for rustup/rustc without changing the parent environment.
+    if let Some(parent) = cargo.parent() {
+        let mut paths = vec![parent.to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        command.env(
+            "PATH",
+            std::env::join_paths(paths).context("invalid build PATH")?,
+        );
+    }
     // Check skips linking: do not stop a working account for an unlinked update.
     command
         .args(["build", "--locked", "--bin", "atarustia", "--target-dir"])
         .arg(&target);
-    let (success, output, errors) = run(&mut command, root, Duration::from_secs(300)).await?;
+    let (success, output, errors) = run(&mut command, root, Duration::from_secs(300))
+        .await
+        .map_err(|error| anyhow::anyhow!("Cargo build could not run: {error:#}"))?;
     ensure!(success, "{output}{errors}");
     Ok(())
+}
+fn executable_name(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+fn select_cargo(
+    explicit: Option<std::path::PathBuf>,
+    candidates: Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    if let Some(path) = explicit {
+        ensure!(
+            path.is_absolute() && path.is_file(),
+            "CARGO must point to an existing absolute Cargo executable; fix CARGO in the service environment"
+        );
+        return Ok(path);
+    }
+    candidates.into_iter().find(|path| path.is_file()).context(
+        "Cargo executable not found. Install Rust for the bot's service user, add Cargo to PATH, or set CARGO to its absolute path (usually $HOME/.cargo/bin/cargo). Restart the service after changing its environment",
+    )
+}
+fn cargo_path() -> Result<std::path::PathBuf> {
+    let name = executable_name("cargo");
+    // Do not search the checkout/current directory for executables.
+    let mut candidates: Vec<_> =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .filter(|path| path.is_absolute())
+            .map(|path| path.join(&name))
+            .collect();
+    if let Some(home) = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+    {
+        candidates.push(home.join("bin").join(&name));
+    }
+    for variable in ["HOME", "USERPROFILE"] {
+        if let Some(home) = std::env::var_os(variable)
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+        {
+            candidates.push(home.join(".cargo/bin").join(&name));
+        }
+    }
+    // cargo run/build records the build tool path. It is only a fallback, and
+    // only if it still exists on this machine after deployment.
+    if let Some(path) = option_env!("CARGO")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+    {
+        candidates.push(path);
+    }
+    select_cargo(
+        std::env::var_os("CARGO")
+            .filter(|p| !p.is_empty())
+            .map(Into::into),
+        candidates,
+    )
 }
 /// Alternate build directories: Windows cannot overwrite the running executable.
 pub fn build_directory(root: &Path) -> std::path::PathBuf {
@@ -304,6 +399,50 @@ pub fn built_executable(root: &Path) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cargo_resolution_uses_existing_fallback_and_rejects_invalid_explicit_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let tool = dir.path().join(executable_name("cargo"));
+        std::fs::write(&tool, b"synthetic executable path").unwrap();
+        assert_eq!(
+            select_cargo(None, vec![missing.clone(), tool.clone()]).unwrap(),
+            tool
+        );
+        assert!(
+            select_cargo(Some(missing), vec![tool.clone()])
+                .unwrap_err()
+                .to_string()
+                .contains("CARGO")
+        );
+        assert!(select_cargo(Some("cargo".into()), vec![tool]).is_err());
+        let error = select_cargo(None, vec![]).unwrap_err().to_string();
+        assert!(error.contains("Cargo executable not found"));
+        assert!(error.contains("service user"));
+    }
+
+    #[tokio::test]
+    async fn missing_program_and_checkout_have_actionable_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = run(
+            &mut tokio::process::Command::new(dir.path().join("nonexistent-cargo")),
+            dir.path(),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("cannot start"));
+        let error = sync(&dir.path().join("missing-checkout"))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("checkout directory does not exist")
+        );
+        let error = sync(dir.path()).await.unwrap_err();
+        assert!(error.to_string().contains("no Cargo.toml"));
+    }
     #[test]
     fn update_build_never_overwrites_the_running_windows_executable() {
         let target = Path::new("target");

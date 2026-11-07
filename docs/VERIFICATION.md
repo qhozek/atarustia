@@ -2,6 +2,10 @@
 
 Локальная среда: Windows x86_64, Rust 1.99.1 GNU. Проверки выполняются без Telegram credentials.
 
+Cargo startup regression: проверены поиск executable через existing fallback, явный ошибочный
+`CARGO`, отсутствие программы/checkout/Cargo.toml и actionable errors. Служба пользователя
+и её реальный PATH/права требуют проверки на целевой машине; это не ошибка dependency resolver.
+
 P0.2: policy/manifest tests фиксируют два принятых решения (CPython bridge и двусторонние данные),
 проверяют ссылку на ADR и неполный implementation status. Это проверка целостности решения,
 не тест отсутствующего Python runtime, обратных codecs или ускорения.
