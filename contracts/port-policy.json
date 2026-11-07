@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "goal": "Current-main Ataraxia user-facing behavior and presentation implemented in Rust",
+  "implementation_identity": [
+    {"id": "rust-core", "scope": "implementation", "rule": "Rust/Tokio and Cargo replace Python/asyncio and uv; preserve observable command behavior"},
+    {"id": "truthful-build", "scope": "presentation", "rule": "Rust repository, commit, transport and layer information must remain truthful; surrounding layout follows upstream"},
+    {"id": "legacy-web", "scope": "extension", "rule": "Old web UI is explicit --web opt-in, outside current-main parity; do not delete existing user data"}
+  ],
+  "unresolved_decisions": [
+    {"id": "python-runtime", "priority": "P0.2", "status": "decision_required", "question": "Must unmodified Python modules and Python .e run, or is only a Rust-native extension ecosystem required?"},
+    {"id": "file-compatibility", "priority": "P0.2", "status": "decision_required", "question": "Require bidirectional session/backup compatibility or an explicit migration-only boundary?"}
+  ],
+  "known_deviations_not_accepted_as_parity": [
+    "Rhai is not Python .e or unmodified Python module compatibility",
+    "Security/loader/backup argument and screen parity remains incomplete",
+    "Accounts input is target-only rather than upstream's owner-plus-target allow-list",
+    "Accounts expired-code Retry asks for phone again; total TTL requires a new .addacc",
+    "Widgets and dynamic TL layer parity remain incomplete",
+    "Shell requires --allow-shell and updater history policy differs",
+    "Rust session and backup formats are distinct",
+    "Live Telegram and screenshot parity have not been verified"
+  ],
+  "acceptance": {
+    "manifest_check_proves": "Pinned source identity, inventory reproducibility and selected Rust structural assertions only",
+    "manifest_check_does_not_prove": "Behavioral, security, transport, visual or live Telegram equivalence",
+    "required_evidence": ["differential payload/state tests", "negative and failure tests", "load/shutdown tests", "live Telegram acceptance", "same-client screenshot comparison"],
+    "exceptions": "New observable differences require an explicit reviewed policy entry; missing implementation is not an accepted exception"
+  }
+}

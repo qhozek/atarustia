@@ -15,3 +15,6 @@ current main, pinned for this port at 122c2692391b1bfc40456270b7ff998c2ee10af8.
 - Do not call the port complete because tests pass. Track unimplemented parity in
   docs/ORIGINAL_PARITY.md and verify Telegram behavior separately from local tests.
 - Never commit credentials or tokens. Do not reset or discard unrelated work.
+- `contracts/upstream-manifest.json` is the generated reference inventory, not a completion claim.
+  Read `docs/UPSTREAM_CONTRACT.md` before changing the pin. Never edit generated requirements
+  to match an incomplete Rust implementation. Argument scenarios and exception policy need review.

@@ -2,6 +2,12 @@
 
 Локальная среда: Windows x86_64, Rust 1.99.1 GNU. Проверки выполняются без Telegram credentials.
 
+P0.1: `tests/upstream_manifest.rs` сверяет pin/policy, command ownership/aliases, все langpack
+values и assets с generated inventory. `scripts/test_upstream_contract.py` отдельно проверяет
+static extraction без исполнения, строгие YAML failures, Git blobs вместо dirty checkout,
+drift/review guards и сохранение error-report. Online `verify` воспроизводит pinned manifest;
+online `drift` сверяет remote main. Это структурные проверки, не behavioral/live parity.
+
 Этап current-main (2026-11-07): добавлены проверки каталога 66 команд / 13 модулей,
 SHA-256 текущих RU/EN langpacks и terminal artwork, terminal/custom login defaults,
 case-insensitive legacy aliases, unknown RTT и чередования update build-каталогов.

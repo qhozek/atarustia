@@ -3,6 +3,14 @@
 Эталон интерфейсов и поведения — xenside/ataraxia, ревизия
 `122c2692391b1bfc40456270b7ff998c2ee10af8` (current main checked 2026-11-07).
 
+## P0.1 — reference manifest и drift guard
+
+Добавлены `contracts/upstream-manifest.json`, карточки поведения всех 66 команд и явная policy
+с незакрытыми решениями P0.2. Static extractor читает Git blobs/AST/langpacks без исполнения
+оригинала. CI сверяет pinned manifest и ежедневно проверяет drift remote main; Rust-тесты
+проверяют каталог/aliases/resources локально. [Инструкция и границы](UPSTREAM_CONTRACT.md).
+Manifest фиксирует требования, включая ещё не перенесённые API: это не completion certificate.
+
 ## Переход на текущую main — этап 1
 
 - Каталог: 66 команд и 13 core-модулей, `addacc` принадлежит `ataraxiaAccounts`.

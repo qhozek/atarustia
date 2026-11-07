@@ -12,3 +12,5 @@ config-*.json
 *.key
 *.session
 *.session-*
+__pycache__/
+*.pyc

@@ -28,8 +28,14 @@ fn legacy_opt_in_frontend_keeps_its_original_attribution_and_assets() {
 }
 #[test]
 fn command_catalogue_contains_exactly_the_original_names() {
-    let expected = "info help helphide ataraxia dlm lm ulm ml clearmodules config fconfig settings setprefix setlang aliases addalias delalias watchers watcher watcherbl nonickcmd nonickuser nonickchat nonickcmds nonickusers nonickchats e terminal terminate ec ecpp enode security inlinesec owneradd ownerrm ownerlist newsgroup sgroups sgroup delsgroup sgroupadd sgroupdel tsec tsecrm tsecclr querysec backupall restoreall backupdb restoredb backupmods restoremods set_backup_period update restart source ping logs clearlogs addacc ch_ataraxia_bot ch_bot_token dllangpack cleardb clearmodule";
-    let expected: std::collections::BTreeSet<_> = expected.split_whitespace().collect();
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../contracts/upstream-manifest.json")).unwrap();
+    let expected: std::collections::BTreeSet<_> = manifest["commands"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     let actual: std::collections::BTreeSet<_> = atarustia::commands::BUILTINS
         .iter()
         .chain(atarustia::preferences::COMMANDS)

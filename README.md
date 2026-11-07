@@ -222,6 +222,10 @@ systemd unit: [deploy/atarustia.service](deploy/atarustia.service). Укажи �
 
 ## Разработка
 
+Машинный эталон текущей Ataraxia и порядок проверки новых upstream-коммитов:
+[docs/UPSTREAM_CONTRACT.md](docs/UPSTREAM_CONTRACT.md). Это dev-инструменты; они не запускают
+Python-юзербот и не подтверждают автоматически полную parity Rust-порта.
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings

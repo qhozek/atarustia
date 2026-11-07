@@ -1,0 +1,48 @@
+name: Upstream contract
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '19 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Test static extractor offline
+        run: python -m unittest discover -s scripts -p 'test_upstream_contract.py' -v
+      - name: Reproduce accepted manifest from immutable upstream commit
+        run: python scripts/upstream_contract.py verify
+
+  drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Compare remote main without updating the accepted pin
+        run: python scripts/upstream_contract.py drift --output upstream-drift.json --markdown upstream-drift.md
+      - name: Retain review report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-drift
+          path: |
+            upstream-drift.json
+            upstream-drift.md
+          if-no-files-found: warn
