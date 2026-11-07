@@ -168,6 +168,7 @@ struct Unit {
     destination: Option<(i64, i32)>,
     callback_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     editing_tokens: Option<Vec<String>>,
+    delivery_error: Option<crate::botapi::ApiError>,
     // A repeated Telegram inline query is a read, not a new keyboard revision.
     inline_snapshot: Option<grammers_client::tl::enums::InputBotInlineResult>,
 }
@@ -501,6 +502,7 @@ impl Forms {
                 destination: None,
                 callback_lock: Default::default(),
                 editing_tokens: None,
+                delivery_error: None,
                 inline_snapshot: None,
             },
         );
@@ -706,6 +708,16 @@ impl Forms {
             .context("form expired")?
             .inline_snapshot = Some(result.clone());
         Ok(result)
+    }
+    pub(crate) fn record_delivery_error(&mut self, id: &str, error: crate::botapi::ApiError) {
+        if let Some(unit) = self.units.get_mut(id) {
+            unit.delivery_error = Some(error);
+        }
+    }
+    pub(crate) fn take_delivery_error(&mut self, id: &str) -> Option<crate::botapi::ApiError> {
+        self.units
+            .get_mut(id)
+            .and_then(|unit| unit.delivery_error.take())
     }
     pub fn plain_fallback(&mut self, id: &str) -> bool {
         if let Some(unit) = self.units.get_mut(id) {
@@ -1004,6 +1016,24 @@ impl Forms {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn delivery_errors_preserve_server_rejection_and_are_consumed_once() {
+        let (forms, id, _) = updater_fixture();
+        let mut forms = forms.lock().unwrap();
+        forms.record_delivery_error(
+            &id,
+            crate::botapi::ApiError {
+                method: "answerInlineQuery".into(),
+                kind: crate::botapi::ErrorKind::BadRequest,
+                description: "RICH_MESSAGE_INVALID".into(),
+                retry_after: None,
+            },
+        );
+        assert!(crate::rich_html::rejected_api(
+            &forms.take_delivery_error(&id).unwrap()
+        ));
+        assert!(forms.take_delivery_error(&id).is_none());
+    }
     fn updater_fixture() -> (std::sync::Mutex<Forms>, String, String) {
         let mut forms = Forms::default();
         let (id, _) = forms

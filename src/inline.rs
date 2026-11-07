@@ -142,12 +142,21 @@ impl BotHandle {
                     Ok::<_, anyhow::Error>(())
                 }
                 .await;
+                // The bot answers on another worker. Preserve its actual rich rejection
+                // instead of reducing it to an empty-result error on the user account.
+                let outcome =
+                    if let Some(error) = context.forms.lock().unwrap().take_delivery_error(&id) {
+                        Err(anyhow::Error::new(error))
+                    } else {
+                        outcome
+                    };
                 match outcome {
                     Ok(()) => break,
                     Err(ref e)
                         if crate::rich_html::rejected(e)
                             && context.forms.lock().unwrap().plain_fallback(&id) =>
                     {
+                        tracing::warn!(error=%crate::output::censor(e.to_string(), &context.secrets), "Telegram rejected rich form; retrying structured plain fallback");
                         continue;
                     }
                     Err(e) => return Err(e),
@@ -162,7 +171,12 @@ impl BotHandle {
                 return Err(e);
             }
             Err(_) => {
-                context.forms.lock().unwrap().remove(&id);
+                let mut forms = context.forms.lock().unwrap();
+                let error = forms.take_delivery_error(&id);
+                forms.remove(&id);
+                if let Some(error) = error {
+                    return Err(error.into());
+                }
                 anyhow::bail!("inline form timed out");
             }
         }
@@ -187,7 +201,6 @@ async fn screen(context: &Context, user: i64, page: usize) -> Result<InputMessag
     .await?;
     let mut forms = context.forms.lock().unwrap();
     let (id, _) = forms.create(help, user, vec![context.owner])?;
-    forms.plain_fallback(&id);
     let input = forms.render(&id, 0)?;
     Ok(input)
 }
@@ -320,18 +333,51 @@ async fn handle_delivery(context: &Context, update: &Update) -> Result<bool> {
         && let Some(unit) = query.text().strip_prefix("unit:")
     {
         let owners = security::owners(&context.db, context.owner);
-        let results = if owners.contains(&query.sender_id().bare_id_unchecked()) {
-            context
-                .forms
-                .lock()
-                .unwrap()
-                .inline_result(unit)
-                .map(|r| vec![r])
-                .unwrap_or_default()
+        let authorized = owners.contains(&query.sender_id().bare_id_unchecked());
+        let mut results = if authorized {
+            let result = context.forms.lock().unwrap().inline_result(unit);
+            match result {
+                Ok(result) => vec![result],
+                Err(error) => {
+                    context.forms.lock().unwrap().record_delivery_error(
+                        unit,
+                        crate::botapi::ApiError::from_error("answerInlineQuery", error),
+                    );
+                    vec![]
+                }
+            }
         } else {
             vec![]
         };
-        query.answer(results).private().cache_time(0).send().await?;
+        loop {
+            match query
+                .answer(results.clone())
+                .private()
+                .cache_time(0)
+                .send()
+                .await
+            {
+                Ok(()) => break,
+                Err(error) => {
+                    let error = anyhow::Error::from(error);
+                    if authorized
+                        && crate::rich_html::rejected(&error)
+                        && context.forms.lock().unwrap().plain_fallback(unit)
+                    {
+                        tracing::warn!(error=%crate::output::censor(error.to_string(), &context.secrets),"Telegram rejected rich inline answer; retrying structured plain fallback");
+                        results = vec![context.forms.lock().unwrap().inline_result(unit)?];
+                        continue;
+                    }
+                    if authorized {
+                        context.forms.lock().unwrap().record_delivery_error(
+                            unit,
+                            crate::botapi::ApiError::from_error("answerInlineQuery", error),
+                        );
+                    }
+                    anyhow::bail!("inline answer failed; original error retained on form");
+                }
+            }
+        }
         return Ok(true);
     }
     if matches!(update.raw(),grammers_client::tl::enums::Update::BotInlineSend(sent) if sent.query.starts_with("unit:"))
@@ -554,19 +600,46 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                     &Default::default(),
                 )
                 .await?;
-                let (id, _) = context.forms.lock().unwrap().create(
+                let (id, body) = context.forms.lock().unwrap().create(
                     screen,
                     m.sender_id()
                         .map(|s| s.bare_id_unchecked())
                         .unwrap_or(context.owner),
                     vec![context.owner],
                 )?;
-                let body = {
-                    let mut forms = context.forms.lock().unwrap();
-                    forms.plain_fallback(&id);
-                    forms.render(&id, 0)?
+                let result = m.respond(body).await;
+                match result {
+                    Ok(sent) => context.forms.lock().unwrap().bind_message(
+                        &id,
+                        sent.peer_id().bot_api_dialog_id_unchecked(),
+                        sent.id(),
+                    ),
+                    Err(error) => {
+                        let error = anyhow::Error::from(error);
+                        if crate::rich_html::rejected(&error) {
+                            tracing::warn!(error=%crate::output::censor(error.to_string(), &context.secrets), "Telegram rejected rich bot help; retrying structured plain fallback");
+                            let body = {
+                                let mut forms = context.forms.lock().unwrap();
+                                forms.plain_fallback(&id);
+                                forms.render(&id, 0)?
+                            };
+                            match m.respond(body).await {
+                                Ok(sent) => context.forms.lock().unwrap().bind_message(
+                                    &id,
+                                    sent.peer_id().bot_api_dialog_id_unchecked(),
+                                    sent.id(),
+                                ),
+                                Err(error) => {
+                                    context.forms.lock().unwrap().remove(&id);
+                                    return Err(error.into());
+                                }
+                            }
+                        } else {
+                            context.forms.lock().unwrap().remove(&id);
+                            return Err(error);
+                        }
+                    }
                 };
-                m.respond(body).await?;
             }
         }
         Update::CallbackQuery(q) => {

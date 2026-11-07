@@ -36,6 +36,16 @@ invented mapping from arbitrary Telegram document IDs to upstream named icons.
 
 ## Delivery and error boundaries
 
+Help delivery is rich-first for both `.help` and bot `/help`; the legacy help navigation
+also no longer forces plain mode. When a connected inline bot fails to deliver `.help`,
+the command propagates that failure instead of silently replacing it with ordinary HTML.
+The no-bot path still provides non-interactive text help. A recognized rich rejection
+while answering an inline query retries the same query with structured fallback; actual
+answer errors are retained per form and consumed by the sending account, rather than
+being replaced by a generic empty-result error. Every automatic rich fallback logs its
+reason. Tests verify the help inline result contains a rich HTML payload with bound
+in-text buttons, and changes to ordinary text only after explicit fallback.
+
 Callback edits now retain the displayed revision's tokens until Telegram accepts the
 replacement. Failed/cancelled edits restore the screen, keyboard, rich/plain state and
 inline snapshot; successful edits retire the old tokens. Per-form callback lanes suppress

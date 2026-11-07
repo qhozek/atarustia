@@ -49,6 +49,37 @@ fn catalog() -> Catalog {
     }
 }
 #[test]
+fn help_delivery_uses_rich_inline_payload_until_server_rejection() {
+    use grammers_client::tl;
+    let screen = render(&catalog(), &State::default(), true);
+    let mut forms = Forms::default();
+    let (id, _) = forms.create(screen, 123, vec![]).unwrap();
+    let result = forms.inline_result(&id).unwrap();
+    let tl::enums::InputBotInlineResult::Result(result) = result else {
+        panic!()
+    };
+    let tl::enums::InputBotInlineMessage::RichMessage(rich) = result.send_message else {
+        panic!("help must be rich by default")
+    };
+    let tl::enums::InputRichMessage::Html(html) = rich.rich_message else {
+        panic!()
+    };
+    assert!(html.html.contains("<details"));
+    assert!(html.html.contains("<tg-button"));
+    assert!(!html.html.contains("{{atarustia:tap:"));
+    assert!(rich.reply_markup.is_some());
+    assert!(forms.plain_fallback(&id));
+    let result = forms.inline_result(&id).unwrap();
+    let tl::enums::InputBotInlineResult::Result(result) = result else {
+        panic!()
+    };
+    let tl::enums::InputBotInlineMessage::Text(text) = result.send_message else {
+        panic!("rejected rich help must use structured text")
+    };
+    assert!(text.message.contains("Core"));
+    assert!(text.reply_markup.is_some());
+}
+#[test]
 fn catalogue_has_original_sections_fifteen_external_entries_and_core_on_every_page() {
     let c = catalog();
     for page in 0..3 {

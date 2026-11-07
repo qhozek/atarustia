@@ -1204,9 +1204,10 @@ pub async fn send(ctx: &Context, message: &Message, args: &str) -> Result<()> {
         .bare_id_unchecked();
     let state = State::parse(args)?;
     let screen = build(ctx, user, Some(message), &state).await?;
-    if let Some(bot) = ctx.bot.read().await.clone()
-        && bot.form(ctx, message, screen.clone()).await.is_ok()
-    {
+    if let Some(bot) = ctx.bot.read().await.clone() {
+        bot.form(ctx, message, screen.clone())
+            .await
+            .context("could not deliver rich help form")?;
         return Ok(());
     }
     let pages = if screen.pages.is_empty() {
