@@ -587,6 +587,17 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         return Ok(());
                     }
                 };
+                let callback_lock = context.forms.lock().unwrap().callback_lock(&click.unit)?;
+                let Ok(_callback_guard) = callback_lock.try_lock() else {
+                    q.answer().send().await?;
+                    return Ok(());
+                };
+                // Recheck after acquiring the edit lane; another edit may have replaced the button.
+                context
+                    .forms
+                    .lock()
+                    .unwrap()
+                    .click(data, q.sender_id().bare_id_unchecked())?;
                 if let grammers_client::tl::enums::Update::InlineBotCallbackQuery(raw) = &q.raw {
                     context
                         .forms
@@ -666,6 +677,74 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         );
                     }
                 }
+                // Updater commits each progress screen separately; do not roll back a
+                // successfully delivered progress screen when a later build step fails.
+                if matches!(
+                    click.action,
+                    Action::Update { .. } | Action::Restart | Action::UpdateDismiss
+                ) {
+                    return crate::update_flow::callback(context, &q, click.unit, click.action)
+                        .await;
+                }
+                if matches!(click.action, Action::Close) {
+                    let target = {
+                        let forms = context.forms.lock().unwrap();
+                        forms
+                            .configuration(&click.unit)
+                            .then(|| forms.destination(&click.unit))
+                            .flatten()
+                    };
+                    if let Some((chat, id)) = target {
+                        let peer = grammers_session::types::PeerId::from_bot_api_dialog_id(chat)
+                            .context("invalid form chat")?;
+                        context
+                            .client
+                            .delete_messages(peer.to_ambient_ref(), &[id])
+                            .await?;
+                    } else {
+                        let bot = context
+                            .bot
+                            .read()
+                            .await
+                            .clone()
+                            .context("inline bot disconnected")?;
+                        bot.bot
+                            .edit_callback(
+                                &q,
+                                InputMessage::new()
+                                    .text("✕")
+                                    .reply_markup(ReplyMarkup::from_buttons(&[])),
+                            )
+                            .await?;
+                    }
+                    context.forms.lock().unwrap().remove(&click.unit);
+                    let _ = q.answer().send().await;
+                    return Ok(());
+                }
+                if matches!(
+                    click.action,
+                    Action::SettingsMaintenance {
+                        confirmed: true,
+                        ..
+                    }
+                ) {
+                    let Action::SettingsMaintenance { restart, .. } = click.action else {
+                        unreachable!()
+                    };
+                    let action = if restart {
+                        Action::Restart
+                    } else {
+                        let changes = crate::updater::check(crate::update_flow::root()).await?;
+                        Action::Update {
+                            current: changes.current,
+                            incoming: changes.incoming,
+                            retry: false,
+                        }
+                    };
+                    return crate::update_flow::callback(context, &q, click.unit, action).await;
+                }
+                let edit = crate::forms::Edit::begin(&context.forms, &click.unit)?;
+                let result = async {
                 let message = match click.action {
                     Action::Account { .. } => {
                         unreachable!("account actions were handled before delegation")
@@ -733,25 +812,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             .replace(&click.unit, crate::config_ui::settings(context))?
                     }
                     Action::SettingsMaintenance { restart, confirmed } => {
-                        anyhow::ensure!(
-                            owners.contains(&q.sender_id().bare_id_unchecked()),
-                            "owner only settings"
-                        );
-                        if confirmed {
-                            let action = if restart {
-                                Action::Restart
-                            } else {
-                                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-                                let changes = crate::updater::check(root).await?;
-                                Action::Update {
-                                    current: changes.current,
-                                    incoming: changes.incoming,
-                                    retry: false,
-                                }
-                            };
-                            return crate::update_flow::callback(context, &q, click.unit, action)
-                                .await;
-                        }
+                        debug_assert!(!confirmed, "confirmed maintenance routed before edit guard");
                         q.answer().send().await?;
                         context.forms.lock().unwrap().replace(
                             &click.unit,
@@ -761,9 +822,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             ),
                         )?
                     }
-                    action @ (Action::Update { .. } | Action::Restart | Action::UpdateDismiss) => {
-                        return crate::update_flow::callback(context, &q, click.unit, action).await;
-                    }
+                    Action::Update { .. } | Action::Restart | Action::UpdateDismiss | Action::Close => unreachable!("maintenance/close actions routed before edit guard"),
                     Action::Copy { .. } | Action::SwitchInline { .. } | Action::Disabled => {
                         q.answer().send().await?;
                         return Ok(());
@@ -782,31 +841,6 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                             context.forms.lock().unwrap().replace(&click.unit, screen)?;
                         }
                         context.forms.lock().unwrap().render(&click.unit, page)?
-                    }
-                    Action::Close => {
-                        let target = {
-                            let forms = context.forms.lock().unwrap();
-                            forms
-                                .configuration(&click.unit)
-                                .then(|| forms.destination(&click.unit))
-                                .flatten()
-                        };
-                        if let Some((chat, id)) = target {
-                            let peer =
-                                grammers_session::types::PeerId::from_bot_api_dialog_id(chat)
-                                    .context("invalid form chat")?;
-                            context
-                                .client
-                                .delete_messages(peer.to_ambient_ref(), &[id])
-                                .await?;
-                            context.forms.lock().unwrap().remove(&click.unit);
-                            q.answer().send().await?;
-                            return Ok(());
-                        }
-                        context.forms.lock().unwrap().remove(&click.unit);
-                        InputMessage::new()
-                            .text("✕")
-                            .reply_markup(ReplyMarkup::from_buttons(&[]))
                     }
                     action @ (Action::Help { .. }
                     | Action::HelpNavigate { .. }
@@ -954,7 +988,8 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         .await;
                     }
                 };
-                if let Some(bot) = context.bot.read().await.as_ref() {
+                let bot = context.bot.read().await.clone().context("inline bot disconnected")?;
+                {
                     let rich = context.forms.lock().unwrap().rich_source(&click.unit);
                     let media = context.forms.lock().unwrap().media(&click.unit);
                     if let Some(media) = media {
@@ -976,7 +1011,20 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         }
                     }
                 }
-                return Ok(());
+                Ok::<_, anyhow::Error>(())
+                }.await;
+                if result.is_ok() {
+                    edit.commit();
+                } else {
+                    // Roll back before notifying: the button still visible in Telegram must work.
+                    drop(edit);
+                    let _ = q
+                        .answer()
+                        .alert("Could not update the form. Please try again.")
+                        .send()
+                        .await;
+                }
+                return result;
             }
             if !owners.contains(&q.sender_id().bare_id_unchecked()) {
                 q.answer().alert("Owner only").send().await?;

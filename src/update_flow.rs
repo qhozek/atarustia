@@ -100,8 +100,11 @@ pub struct Surface {
 impl Surface {
     pub async fn show(&self, ctx: &Context, screen: Screen) -> Result<()> {
         if let Some(unit) = &self.unit {
+            let edit = crate::forms::Edit::begin(&ctx.forms, unit)?;
             let input = ctx.forms.lock().unwrap().replace(unit, screen)?;
-            self.target.edit(ctx, input).await
+            self.target.edit(ctx, input).await?;
+            edit.commit();
+            Ok(())
         } else {
             self.target.screen(ctx, &screen).await
         }
@@ -180,8 +183,8 @@ pub fn pending(db: &Database) -> Result<Option<Pending>> {
     })
 }
 async fn best_effort(surface: &Surface, ctx: &Context, screen: Screen) {
-    if surface.show(ctx, screen).await.is_err() {
-        tracing::warn!("could not edit updater progress; operation state is unchanged");
+    if let Err(error) = surface.show(ctx, screen).await {
+        tracing::warn!(error=%ctx.logs.redact(crate::output::error_message(&error.to_string(), &ctx.secrets)), "could not edit updater progress; displayed form restored");
     }
 }
 pub async fn command(ctx: &Context, message: &Message, name: &str, args: &str) -> Result<()> {
@@ -311,70 +314,101 @@ pub async fn callback(
         target: Target::callback(query).await?,
         unit: Some(unit.clone()),
     };
-    match action {
-        crate::forms::Action::Update {
-            current,
-            incoming,
-            retry,
-        } => {
-            ensure!(
-                updater::valid_hash(&current) && updater::valid_hash(&incoming),
-                "invalid reviewed commit"
-            );
-            let report = if retry {
-                let report = retry_report(ctx)?.context("no dependency retry pending")?;
+    let result = async {
+        match action {
+            crate::forms::Action::Update {
+                current,
+                incoming,
+                retry,
+            } => {
                 ensure!(
-                    report.current == current && report.incoming == incoming,
-                    "retry no longer matches this update"
+                    updater::valid_hash(&current) && updater::valid_hash(&incoming),
+                    "invalid reviewed commit"
                 );
-                report
-            } else {
-                let result = updater::check(root()).await;
-                match result {
-                    Ok(report) if report.current == current && report.incoming == incoming => {
-                        report
+                let report = if retry {
+                    let report = retry_report(ctx)?.context("no dependency retry pending")?;
+                    ensure!(
+                        report.current == current && report.incoming == incoming,
+                        "retry no longer matches this update"
+                    );
+                    report
+                } else {
+                    let result = updater::check(root()).await;
+                    match result {
+                        Ok(report) if report.current == current && report.incoming == incoming => {
+                            report
+                        }
+                        other => {
+                            let error = match other {
+                                Ok(_) => "Upstream changed; review .update again".to_owned(),
+                                Err(error) => ctx.logs.redact(crate::output::error_message(
+                                    &error.to_string(),
+                                    &ctx.secrets,
+                                )),
+                            };
+                            surface
+                                .show(ctx, Ui::new(&ctx.db).failed(&error, None))
+                                .await
+                                .with_context(|| {
+                                    format!("{error}; could not display updater failure")
+                                })?;
+                            return Ok(());
+                        }
                     }
-                    other => {
-                        let error = match other {
-                            Ok(_) => "Upstream changed; review .update again".to_owned(),
-                            Err(error) => ctx.logs.redact(crate::output::error_message(
-                                &error.to_string(),
-                                &ctx.secrets,
-                            )),
-                        };
-                        best_effort(&surface, ctx, Ui::new(&ctx.db).failed(&error, None)).await;
-                        return Ok(());
-                    }
-                }
-            };
-            update(ctx, &surface, report, retry).await
-        }
-        crate::forms::Action::Restart => restart(ctx, &surface).await,
-        crate::forms::Action::UpdateDismiss => {
-            // Invalidate the entire form before deleting or editing its message.
-            ctx.forms.lock().unwrap().remove(&unit);
-            match &surface.target {
-                Target::Bot { peer, id } => {
-                    if let Some(bot) = ctx.bot.read().await.clone() {
+                };
+                update(ctx, &surface, report, retry).await
+            }
+            crate::forms::Action::Restart => restart(ctx, &surface).await,
+            crate::forms::Action::UpdateDismiss => {
+                match &surface.target {
+                    Target::Bot { peer, id } => {
+                        let bot = ctx.bot.read().await.clone().context("bot disconnected")?;
                         bot.bot.native().delete_message(*peer, *id).await?;
                     }
+                    _ => {
+                        surface
+                            .target
+                            .edit(
+                                ctx,
+                                InputMessage::new()
+                                    .text("✕")
+                                    .reply_markup(ReplyMarkup::from_buttons(&[])),
+                            )
+                            .await?
+                    }
                 }
-                _ => {
-                    surface
-                        .target
-                        .edit(
-                            ctx,
-                            InputMessage::new()
-                                .text("✕")
-                                .reply_markup(ReplyMarkup::from_buttons(&[])),
-                        )
-                        .await?
-                }
+                ctx.forms.lock().unwrap().remove(&unit);
+                Ok(())
             }
-            Ok(())
+            _ => anyhow::bail!("not an updater action"),
         }
-        _ => anyhow::bail!("not an updater action"),
     }
+    .await;
+    if let Err(error) = &result {
+        let text = ctx.logs.redact(crate::output::error_message(
+            &error.to_string(),
+            &ctx.secrets,
+        ));
+        // The early acknowledgement must not make a failed edit look like a successful click.
+        // Use a separate owner-only message because this callback may already be answered.
+        let notification = body(&Ui::new(&ctx.db).failed(&text, None));
+        let sent = if let Some(bot) = ctx.bot.read().await.clone() {
+            bot.bot
+                .native()
+                .send_message(query.sender_id().to_ambient_ref(), notification.clone())
+                .await
+                .is_ok()
+        } else {
+            false
+        };
+        if !sent {
+            let _ = ctx
+                .client
+                .send_message(PeerId::self_user().to_ambient_ref(), notification)
+                .await;
+        }
+    }
+    result
 }
 pub async fn update(ctx: &Context, surface: &Surface, report: Report, retry: bool) -> Result<()> {
     let _lock = updater::MAINTENANCE
@@ -390,25 +424,27 @@ pub async fn update(ctx: &Context, surface: &Surface, report: Report, retry: boo
     let ui = Ui::new(&ctx.db);
     let started = crate::security::now();
     let timer = Instant::now();
-    best_effort(surface, ctx, ui.progress(&[], 0)).await;
+    // Do not mutate the checkout if the confirmation cannot become a progress screen.
+    surface.show(ctx, ui.progress(&[], 0)).await?;
     let apply = if retry {
         updater::verify_retry(root(), &report.incoming).await
     } else {
         updater::apply_reviewed(root(), &report.current, &report.incoming).await
     };
     if let Err(error) = apply {
-        best_effort(
-            surface,
-            ctx,
-            ui.failed(
-                &ctx.logs.redact(crate::output::error_message(
-                    &error.to_string(),
-                    &ctx.secrets,
-                )),
-                None,
-            ),
-        )
-        .await;
+        surface
+            .show(
+                ctx,
+                ui.failed(
+                    &ctx.logs.redact(crate::output::error_message(
+                        &error.to_string(),
+                        &ctx.secrets,
+                    )),
+                    None,
+                ),
+            )
+            .await
+            .with_context(|| format!("{error}; could not display updater failure"))?;
         return Ok(());
     }
     ctx.db
@@ -419,34 +455,36 @@ pub async fn update(ctx: &Context, surface: &Surface, report: Report, retry: boo
     let result =
         tokio::select! {_=ctx.stop.cancelled()=>return Ok(()),result=updater::sync(root())=>result};
     if let Err(error) = result {
-        best_effort(
-            surface,
-            ctx,
-            ui.failed(
-                &ctx.logs.redact(crate::output::error_message(
-                    &error.to_string(),
-                    &ctx.secrets,
-                )),
-                Some((&report.current, &report.incoming)),
-            ),
-        )
-        .await;
+        surface
+            .show(
+                ctx,
+                ui.failed(
+                    &ctx.logs.redact(crate::output::error_message(
+                        &error.to_string(),
+                        &ctx.secrets,
+                    )),
+                    Some((&report.current, &report.incoming)),
+                ),
+            )
+            .await
+            .with_context(|| format!("{error}; could not display dependency failure"))?;
         return Ok(());
     }
     // A terminal git command may have modified the checkout while Cargo was running.
     if let Err(error) = updater::verify_retry(root(), &report.incoming).await {
-        best_effort(
-            surface,
-            ctx,
-            ui.failed(
-                &ctx.logs.redact(crate::output::error_message(
-                    &error.to_string(),
-                    &ctx.secrets,
-                )),
-                None,
-            ),
-        )
-        .await;
+        surface
+            .show(
+                ctx,
+                ui.failed(
+                    &ctx.logs.redact(crate::output::error_message(
+                        &error.to_string(),
+                        &ctx.secrets,
+                    )),
+                    None,
+                ),
+            )
+            .await
+            .with_context(|| format!("{error}; could not display revision failure"))?;
         return Ok(());
     }
     done.push((1, syncing.elapsed().as_millis() as u64));
@@ -482,7 +520,7 @@ pub async fn restart(ctx: &Context, surface: &Surface) -> Result<()> {
     ensure!(!ctx.stop.is_cancelled(), "shutdown already requested");
     ctx.db
         .set("RustUpdater", "next_executable", serde_json::Value::Null)?;
-    best_effort(surface, ctx, Ui::new(&ctx.db).restarting()).await;
+    surface.show(ctx, Ui::new(&ctx.db).restarting()).await?;
     remember(
         &ctx.db,
         &Pending {

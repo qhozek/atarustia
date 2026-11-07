@@ -36,6 +36,19 @@ invented mapping from arbitrary Telegram document IDs to upstream named icons.
 
 ## Delivery and error boundaries
 
+Callback edits now retain the displayed revision's tokens until Telegram accepts the
+replacement. Failed/cancelled edits restore the screen, keyboard, rich/plain state and
+inline snapshot; successful edits retire the old tokens. Per-form callback lanes suppress
+concurrent double clicks without running the action twice. These are in-memory UI
+transactions, not rollback of database/module side effects or exactly-once RPC delivery.
+Expiry, close and module invalidation still remove the form; rollback cannot resurrect it.
+Updater progress screens commit independently, and an initial failed progress edit stops
+the update/restart before checkout mutation/shutdown. Failure to display an updater error
+is reported separately to the owner's bot PM (Saved Messages if that also fails).
+Late/duplicate callback acknowledgement errors no longer prevent message edits or invalidate
+an already delivered keyboard. New tests simulate failed edits, cancellation, successful
+replacement, closure and duplicate-click admission; live Telegram reproduction remains pending.
+
 Existing typed rich send/edit builders remain the transport layer; rich edits omit
 ordinary text/entities/media fields. Form send/edit fallback is attempted only for
 recognized server rich/entity/custom-emoji rejection. Network errors, FloodWait,

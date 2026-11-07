@@ -492,7 +492,7 @@ pub async fn callback(
         .unwrap()
         .replace(unit, sanitize(context, output))?;
     edit_screen(context, query, unit, body).await?;
-    query.answer().send().await?;
+    let _ = query.answer().send().await;
     Ok(())
 }
 pub async fn edit_screen(

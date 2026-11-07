@@ -1566,6 +1566,9 @@ pub(crate) async fn edit_unit(
         );
         tokio::select! {_=ctx.stop.cancelled()=>anyhow::bail!("account stopped"),_=tokio::time::sleep(std::time::Duration::from_millis(50))=>{}}
     }
+    let callback_lock = ctx.forms.lock().unwrap().callback_lock(unit)?;
+    let _lane = callback_lock.lock().await;
+    let edit = crate::forms::Edit::begin(&ctx.forms, unit)?;
     let (body, rich, id) = {
         let mut forms = ctx.forms.lock().unwrap();
         let body = forms.replace(unit, screen)?;
@@ -1598,6 +1601,7 @@ pub(crate) async fn edit_unit(
         };
         bot.bot.edit_inline_message(&id, body, None, None).await?;
     }
+    edit.commit();
     Ok(())
 }
 pub async fn handle_reply(

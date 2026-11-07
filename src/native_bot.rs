@@ -1367,6 +1367,8 @@ impl NativeBot {
         message: InputMessage,
         media: &crate::media::Media,
     ) -> Result<()> {
+        // A late/duplicate acknowledgement is independent of the message edit.
+        let _ = query.answer().send().await;
         if let tl::enums::Update::InlineBotCallbackQuery(q) = &query.raw {
             self.edit_inline_message(
                 &crate::file_id::encode_inline_id(&q.msg_id),
@@ -1375,10 +1377,19 @@ impl NativeBot {
                 None,
             )
             .await?;
-            query.answer().send().await?;
         } else {
             let prepared = media.prepare(&self.client).await?;
-            query.answer().edit(message.media(prepared)).await?;
+            let tl::enums::Update::BotCallbackQuery(raw) = &query.raw else {
+                anyhow::bail!("not a callback")
+            };
+            let peer = query
+                .peer_ref()
+                .await
+                .map_err(anyhow::Error::from_boxed)?
+                .context("callback peer missing")?;
+            self.client
+                .edit_message(peer, raw.msg_id, message.media(prepared))
+                .await?;
         }
         Ok(())
     }
@@ -1388,12 +1399,12 @@ impl NativeBot {
         message: InputMessage,
         rich: Option<String>,
     ) -> Result<()> {
+        let _ = query.answer().send().await;
         if let tl::enums::Update::InlineBotCallbackQuery(q) = &query.raw {
             let rich = rich.map(|source| crate::bot_edits::RichText::Html { source });
             let request = crate::bot_edits::inline(q.msg_id.clone(), message, rich.as_ref(), None)?;
             let dc = q.msg_id.dc_id();
             self.invoke_inline_dc(dc, &request).await?;
-            query.answer().send().await?;
         } else if let (Some(source), tl::enums::Update::BotCallbackQuery(q)) = (rich, &query.raw) {
             let article = grammers_client::update::Article::new("edit", message);
             let tl::enums::InputBotInlineMessage::Text(content) = article.raw.send_message else {
@@ -1412,9 +1423,16 @@ impl NativeBot {
                     content.reply_markup,
                 )?)
                 .await?;
-            query.answer().send().await?;
         } else {
-            query.answer().edit(message).await?;
+            let tl::enums::Update::BotCallbackQuery(raw) = &query.raw else {
+                anyhow::bail!("not a callback")
+            };
+            let peer = query
+                .peer_ref()
+                .await
+                .map_err(anyhow::Error::from_boxed)?
+                .context("callback peer missing")?;
+            self.client.edit_message(peer, raw.msg_id, message).await?;
         }
         Ok(())
     }

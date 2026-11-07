@@ -166,6 +166,8 @@ struct Unit {
     inline_command: Option<String>,
     inline_id: Option<String>,
     destination: Option<(i64, i32)>,
+    callback_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    editing_tokens: Option<Vec<String>>,
     // A repeated Telegram inline query is a read, not a new keyboard revision.
     inline_snapshot: Option<grammers_client::tl::enums::InputBotInlineResult>,
 }
@@ -187,6 +189,79 @@ pub struct Forms {
     units: HashMap<String, Unit>,
     callbacks: HashMap<String, (String, Action)>,
     inputs: HashMap<(i64, i32), Prompt>,
+}
+/// Restore the displayed keyboard if its replacement did not reach Telegram.
+/// Callers serialize edits for a unit with `callback_lock` before taking this guard.
+pub(crate) struct Edit<'a> {
+    forms: &'a std::sync::Mutex<Forms>,
+    id: String,
+    before: Option<Unit>,
+    callbacks: Vec<(String, Action)>,
+}
+impl<'a> Edit<'a> {
+    pub(crate) fn begin(forms: &'a std::sync::Mutex<Forms>, id: &str) -> Result<Self> {
+        let mut state = forms.lock().unwrap();
+        let before = state.units.get(id).cloned().context("form expired")?;
+        ensure!(
+            before.editing_tokens.is_none(),
+            "form edit already in progress"
+        );
+        let callbacks = before
+            .tokens
+            .iter()
+            .filter_map(|token| {
+                state
+                    .callbacks
+                    .get(token)
+                    .map(|(_, action)| (token.clone(), action.clone()))
+            })
+            .collect();
+        state.units.get_mut(id).unwrap().editing_tokens = Some(before.tokens.clone());
+        Ok(Self {
+            forms,
+            id: id.into(),
+            before: Some(before),
+            callbacks,
+        })
+    }
+    pub(crate) fn commit(mut self) {
+        let mut state = self.forms.lock().unwrap();
+        if let Some(unit) = state.units.get_mut(&self.id) {
+            let live = unit.tokens.clone();
+            unit.editing_tokens = None;
+            for (token, _) in &self.callbacks {
+                if !live.contains(token) {
+                    state.callbacks.remove(token);
+                }
+            }
+        }
+        self.before = None;
+    }
+}
+impl Drop for Edit<'_> {
+    fn drop(&mut self) {
+        let Some(before) = self.before.take() else {
+            return;
+        };
+        let mut state = self.forms.lock().unwrap();
+        // Explicit closure/unload/expiry must never resurrect an old form.
+        if before.expires <= Instant::now() {
+            state.remove(&self.id);
+            return;
+        }
+        if !state.units.contains_key(&self.id) {
+            return;
+        }
+        if let Some(current) = state.units.remove(&self.id) {
+            for token in current.tokens {
+                state.callbacks.remove(&token);
+            }
+        }
+        state.units.insert(self.id.clone(), before);
+        for (token, action) in self.callbacks.drain(..) {
+            state.callbacks.insert(token, (self.id.clone(), action));
+        }
+    }
 }
 #[derive(Clone)]
 pub struct Prompt {
@@ -370,6 +445,14 @@ impl Screen {
     }
 }
 impl Forms {
+    pub(crate) fn callback_lock(&self, id: &str) -> Result<std::sync::Arc<tokio::sync::Mutex<()>>> {
+        Ok(self
+            .units
+            .get(id)
+            .context("form expired")?
+            .callback_lock
+            .clone())
+    }
     pub fn clear(&mut self) {
         self.units.clear();
         self.callbacks.clear();
@@ -416,6 +499,8 @@ impl Forms {
                 inline_command: None,
                 inline_id: None,
                 destination: None,
+                callback_lock: Default::default(),
+                editing_tokens: None,
                 inline_snapshot: None,
             },
         );
@@ -530,7 +615,11 @@ impl Forms {
     pub fn remove(&mut self, id: &str) -> bool {
         self.inputs.retain(|_, p| p.unit != id);
         if let Some(unit) = self.units.remove(id) {
-            for token in unit.tokens {
+            for token in unit
+                .tokens
+                .into_iter()
+                .chain(unit.editing_tokens.into_iter().flatten())
+            {
                 self.callbacks.remove(&token);
             }
             true
@@ -657,7 +746,13 @@ impl Forms {
         let unit = self.units.get_mut(id).context("form expired")?;
         unit.inline_snapshot = None;
         for token in unit.tokens.drain(..) {
-            self.callbacks.remove(&token);
+            if !unit
+                .editing_tokens
+                .as_ref()
+                .is_some_and(|tokens| tokens.contains(&token))
+            {
+                self.callbacks.remove(&token);
+            }
         }
         let fallback = unit
             .rich_failed
@@ -909,6 +1004,165 @@ impl Forms {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn updater_fixture() -> (std::sync::Mutex<Forms>, String, String) {
+        let mut forms = Forms::default();
+        let (id, _) = forms
+            .create(
+                Screen {
+                    text: "Update?".into(),
+                    buttons: vec![vec![Key {
+                        text: "Update".into(),
+                        url: None,
+                        action: Some(Action::Update {
+                            current: "a".repeat(40),
+                            incoming: "b".repeat(40),
+                            retry: false,
+                        }),
+                    }]],
+                    close_button: false,
+                    ..Default::default()
+                },
+                1,
+                vec![],
+            )
+            .unwrap();
+        forms.inline_result(&id).unwrap();
+        let token = forms.units[&id].tokens[0].clone();
+        (std::sync::Mutex::new(forms), id, token)
+    }
+    #[test]
+    fn failed_updater_edit_restores_displayed_action_tokens_and_inline_snapshot() {
+        let (forms, id, shown) = updater_fixture();
+        let snapshot = forms.lock().unwrap().inline_result(&id).unwrap();
+        let edit = Edit::begin(&forms, &id).unwrap();
+        forms
+            .lock()
+            .unwrap()
+            .replace(
+                &id,
+                Screen {
+                    text: "downloading".into(),
+                    close_button: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(
+            forms.lock().unwrap().click(&shown, 1).is_ok(),
+            "visible tokens live until delivery"
+        );
+        assert!(forms.lock().unwrap().click(&shown, 2).is_err());
+        // Simulated RPC rejection/timeout: return without committing the staged replacement.
+        drop(edit);
+        let mut forms = forms.lock().unwrap();
+        assert!(matches!(
+            forms.click(&shown, 1).unwrap().action,
+            Action::Update { retry: false, .. }
+        ));
+        assert_eq!(forms.inline_result(&id).unwrap(), snapshot);
+    }
+    #[test]
+    fn delivered_updater_edit_retires_only_the_previous_keyboard() {
+        let (forms, id, shown) = updater_fixture();
+        let edit = Edit::begin(&forms, &id).unwrap();
+        forms
+            .lock()
+            .unwrap()
+            .replace(
+                &id,
+                Screen {
+                    text: "retry".into(),
+                    buttons: vec![vec![Key {
+                        text: "Retry".into(),
+                        url: None,
+                        action: Some(Action::Restart),
+                    }]],
+                    close_button: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let next = forms.lock().unwrap().units[&id].tokens[0].clone();
+        edit.commit();
+        let mut forms = forms.lock().unwrap();
+        assert!(forms.click(&shown, 1).is_err());
+        assert!(matches!(
+            forms.click(&next, 1).unwrap().action,
+            Action::Restart
+        ));
+        assert_eq!(forms.callbacks.len(), 1);
+    }
+    #[test]
+    fn aborted_or_closed_form_edits_never_resurrect_a_form() {
+        let (forms, id, shown) = updater_fixture();
+        let edit = Edit::begin(&forms, &id).unwrap();
+        forms.lock().unwrap().render(&id, 0).unwrap();
+        forms.lock().unwrap().remove(&id);
+        drop(edit);
+        let mut forms = forms.lock().unwrap();
+        assert!(forms.click(&shown, 1).is_err());
+        assert!(forms.callbacks.is_empty());
+        assert!(forms.units.is_empty());
+    }
+    #[test]
+    fn later_failed_progress_edit_cannot_restore_the_update_confirmation() {
+        let (forms, id, shown) = updater_fixture();
+        let edit = Edit::begin(&forms, &id).unwrap();
+        forms
+            .lock()
+            .unwrap()
+            .replace(&id, crate::update_ui::Ui { english: true }.progress(&[], 0))
+            .unwrap();
+        edit.commit();
+        let progress = forms.lock().unwrap().units[&id].screen.text.clone();
+        let edit = Edit::begin(&forms, &id).unwrap();
+        forms
+            .lock()
+            .unwrap()
+            .replace(
+                &id,
+                crate::update_ui::Ui { english: true }
+                    .failed("build failed", Some((&"a".repeat(40), &"b".repeat(40)))),
+            )
+            .unwrap();
+        let retry = forms.lock().unwrap().units[&id].tokens[0].clone();
+        drop(edit);
+        let mut forms = forms.lock().unwrap();
+        assert_eq!(forms.units[&id].screen.text, progress);
+        assert!(forms.click(&shown, 1).is_err());
+        assert!(forms.click(&retry, 1).is_err());
+        assert!(forms.callbacks.is_empty());
+    }
+    #[tokio::test]
+    async fn cancelled_edit_restores_tokens_and_per_unit_lane_rejects_double_clicks() {
+        let (forms, id, shown) = updater_fixture();
+        let lock = forms.lock().unwrap().callback_lock(&id).unwrap();
+        let lane = lock.try_lock().unwrap();
+        assert!(lock.try_lock().is_err());
+        let task = async {
+            let _edit = Edit::begin(&forms, &id).unwrap();
+            forms
+                .lock()
+                .unwrap()
+                .replace(
+                    &id,
+                    Screen {
+                        text: "pending".into(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            std::future::pending::<()>().await;
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), task)
+                .await
+                .is_err()
+        );
+        assert!(forms.lock().unwrap().click(&shown, 1).is_ok());
+        drop(lane);
+        assert!(lock.try_lock().is_ok());
+    }
     #[test]
     fn duplicate_inline_reads_preserve_rich_tokens_but_fallback_and_expiry_invalidate_them() {
         let mut builder = crate::rich::RichScreen::new();
