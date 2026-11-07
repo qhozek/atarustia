@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, time::Duration};
 pub const REPOSITORY: &str = "https://github.com/qhozek/atarustia.git";
 pub static MAINTENANCE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const DEFAULT_BUILD_TIMEOUT_SECS: u64 = 1800;
+fn build_timeout(value: Option<&str>) -> Result<Duration> {
+    let seconds = match value {
+        None => DEFAULT_BUILD_TIMEOUT_SECS,
+        Some(value) => value
+            .parse::<u64>()
+            .context("ATARUSTIA_BUILD_TIMEOUT_SECS must be an integer in 60..=86400")?,
+    };
+    ensure!(
+        (60..=86400).contains(&seconds),
+        "ATARUSTIA_BUILD_TIMEOUT_SECS must be in 60..=86400"
+    );
+    Ok(Duration::from_secs(seconds))
+}
 async fn validate_origin(root: &Path) -> Result<()> {
     validate_origin_url(root, REPOSITORY).await
 }
@@ -245,38 +259,67 @@ async fn run(
     #[cfg(windows)]
     let _job = crate::commands::WindowsJob::attach(&child)?;
     let _group = crate::commands::ProcessGroup(child.id());
-    let read = |mut stream: Box<dyn tokio::io::AsyncRead + Send + Unpin>| async move {
-        let mut bytes = Vec::new();
+    let out_tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let err_tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+    let read = |mut stream: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+                tail: std::sync::Arc<std::sync::Mutex<Vec<u8>>>| async move {
         let mut buffer = [0; 8192];
         loop {
             let count = stream.read(&mut buffer).await?;
             if count == 0 {
                 break;
             }
+            let mut bytes = tail.lock().unwrap();
             bytes.extend_from_slice(&buffer[..count]);
             if bytes.len() > 256 * 1024 {
-                bytes.drain(..bytes.len() - 256 * 1024);
+                let excess = bytes.len() - 256 * 1024;
+                bytes.drain(..excess);
             }
         }
-        Ok::<_, anyhow::Error>(bytes)
+        Ok::<_, anyhow::Error>(())
     };
     let stdout = child.stdout.take().context("stdout missing")?;
     let stderr = child.stderr.take().context("stderr missing")?;
     let task = async {
-        let (out, err, status) =
-            tokio::try_join!(read(Box::new(stdout)), read(Box::new(stderr)), async {
-                Ok::<_, anyhow::Error>(child.wait().await?)
-            })?;
+        let (_, _, status) = tokio::try_join!(
+            read(Box::new(stdout), out_tail.clone()),
+            read(Box::new(stderr), err_tail.clone()),
+            async { Ok::<_, anyhow::Error>(child.wait().await?) }
+        )?;
         Ok::<_, anyhow::Error>((
             status.success(),
-            String::from_utf8_lossy(&out).to_string(),
-            String::from_utf8_lossy(&err).to_string(),
+            String::from_utf8_lossy(&out_tail.lock().unwrap()).to_string(),
+            String::from_utf8_lossy(&err_tail.lock().unwrap()).to_string(),
         ))
     };
     // Keep process ownership inside the timeout so cancellation kills Cargo and its children as well.
-    tokio::time::timeout(timeout, task)
-        .await
-        .context("update process timed out")?
+    match tokio::time::timeout(timeout, task).await {
+        Ok(result) => result,
+        Err(_) => {
+            let tail = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out_tail.lock().unwrap()),
+                String::from_utf8_lossy(&err_tail.lock().unwrap())
+            );
+            let tail = tail
+                .chars()
+                .rev()
+                .take(4000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            anyhow::bail!(
+                "update process timed out after {} seconds; process tree stopped. Last output:\n{}",
+                timeout.as_secs_f64(),
+                if tail.is_empty() {
+                    "(no output)"
+                } else {
+                    &tail
+                }
+            );
+        }
+    }
 }
 pub async fn sync(root: &Path) -> Result<()> {
     ensure!(
@@ -290,6 +333,8 @@ pub async fn sync(root: &Path) -> Result<()> {
         root.display()
     );
     let target = build_directory(root);
+    let timeout_value = std::env::var("ATARUSTIA_BUILD_TIMEOUT_SECS").ok();
+    let timeout = build_timeout(timeout_value.as_deref())?;
     let cargo = cargo_path()?;
     let mut command = tokio::process::Command::new(&cargo);
     // Services and direct executable restarts may omit ~/.cargo/bin from PATH.
@@ -308,9 +353,9 @@ pub async fn sync(root: &Path) -> Result<()> {
     command
         .args(["build", "--locked", "--bin", "atarustia", "--target-dir"])
         .arg(&target);
-    let (success, output, errors) = run(&mut command, root, Duration::from_secs(300))
+    let (success, output, errors) = run(&mut command, root, timeout)
         .await
-        .map_err(|error| anyhow::anyhow!("Cargo build could not run: {error:#}"))?;
+        .map_err(|error| anyhow::anyhow!("Cargo build did not complete (target: {}; timeout: {} seconds; configure ATARUSTIA_BUILD_TIMEOUT_SECS in the service environment): {error:#}", target.display(), timeout.as_secs()))?;
     ensure!(success, "{output}{errors}");
     Ok(())
 }
@@ -399,6 +444,32 @@ pub fn built_executable(root: &Path) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cold_build_deadline_is_configurable_and_bounded() {
+        assert_eq!(build_timeout(None).unwrap(), Duration::from_secs(1800));
+        assert_eq!(
+            build_timeout(Some("3600")).unwrap(),
+            Duration::from_secs(3600)
+        );
+        for value in ["", "0", "59", "86401", "-1", "never"] {
+            assert!(build_timeout(Some(value)).is_err(), "{value}");
+        }
+    }
+    #[tokio::test]
+    async fn build_deadline_keeps_diagnostics_instead_of_only_elapsed_error() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let script = "echo Compiling fixture 1>&2 & ping -n 10 127.0.0.1 >nul";
+        #[cfg(not(windows))]
+        let script = "echo Compiling fixture >&2; sleep 10";
+        let error = run(&mut shell(script), dir.path(), Duration::from_millis(500))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("timed out after 0.5 seconds"));
+        assert!(error.contains("Compiling fixture"));
+        assert!(error.contains("process tree stopped"));
+    }
     #[test]
     fn cargo_resolution_uses_existing_fallback_and_rejects_invalid_explicit_override() {
         let dir = tempfile::tempdir().unwrap();
