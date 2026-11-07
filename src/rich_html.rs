@@ -294,6 +294,17 @@ impl Plain {
                 },
                 appearance: Default::default(),
             },
+            "switch_inline_query" | "switch_inline_query_current_chat" => FallbackKey {
+                key: Key {
+                    text: text.clone(),
+                    url: None,
+                    action: Some(Action::SwitchInline {
+                        query: button.attrs.get("query").cloned().unwrap_or_default(),
+                        same_chat: kind == "switch_inline_query_current_chat",
+                    }),
+                },
+                appearance: Default::default(),
+            },
             _ => FallbackKey {
                 key: Key {
                     text: text.clone(),
@@ -308,7 +319,10 @@ impl Plain {
         } else if kind == "callback_data" {
             self.emit(button.label);
             self.loose.push(key);
-        } else if matches!(kind, "copy_text" | "url") {
+        } else if matches!(
+            kind,
+            "copy_text" | "url" | "switch_inline_query" | "switch_inline_query_current_chat"
+        ) {
             self.loose.push(key);
         } else {
             self.emit(format!("⟨{}⟩", button.label));
@@ -404,8 +418,10 @@ pub fn fallback(source: &str, taps: &[Key], appearances: &[Appearance]) -> Fallb
                 appearance: style.clone(),
             },
         );
-        let callback = !matches!(key.action, Some(Action::Copy { .. } | Action::Disabled))
-            && key.action.is_some();
+        let callback = !matches!(
+            key.action,
+            Some(Action::Copy { .. } | Action::Disabled | Action::SwitchInline { .. })
+        ) && key.action.is_some();
         let html = crate::rich::styled_button_html(
             &key.text,
             callback.then_some(token.as_str()),

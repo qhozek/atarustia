@@ -53,7 +53,18 @@ fn help_delivery_uses_rich_inline_payload_until_server_rejection() {
     use grammers_client::tl;
     let screen = render(&catalog(), &State::default(), true);
     let mut forms = Forms::default();
-    let (id, _) = forms.create(screen, 123, vec![]).unwrap();
+    let (id, body) = forms.create(screen, 123, vec![]).unwrap();
+    let grammers_client::tl::enums::InputBotInlineMessage::Text(ordinary) =
+        grammers_client::update::Article::new("", body)
+            .raw
+            .send_message
+    else {
+        panic!()
+    };
+    assert!(
+        ordinary.message.is_empty(),
+        "rich forms must not send the legacy text body alongside rich content"
+    );
     let result = forms.inline_result(&id).unwrap();
     let tl::enums::InputBotInlineResult::Result(result) = result else {
         panic!()
@@ -66,6 +77,10 @@ fn help_delivery_uses_rich_inline_payload_until_server_rejection() {
     };
     assert!(html.html.contains("<details"));
     assert!(html.html.contains("<tg-button"));
+    assert!(
+        html.html.contains("style=\"link\""),
+        "upstream Screen.tap uses link-style in-text navigation"
+    );
     assert!(!html.html.contains("{{atarustia:tap:"));
     assert!(rich.reply_markup.is_some());
     assert!(forms.plain_fallback(&id));

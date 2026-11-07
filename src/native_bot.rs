@@ -1181,7 +1181,10 @@ impl NativeBot {
             None
         };
         let rich = rich.map(|s| crate::bot_edits::RichText::Html { source: s.into() });
-        let request = crate::bot_edits::inline(id.clone(), message, rich.as_ref(), media)?;
+        let mut request = crate::bot_edits::inline(id.clone(), message, rich.as_ref(), media)?;
+        if let Some(rich) = &mut request.rich_message {
+            crate::rich_media::prepare(&self.client, rich).await?;
+        }
         self.invoke_inline_dc(id.dc_id(), &request).await?;
         Ok(())
     }
@@ -1402,7 +1405,11 @@ impl NativeBot {
         let _ = query.answer().send().await;
         if let tl::enums::Update::InlineBotCallbackQuery(q) = &query.raw {
             let rich = rich.map(|source| crate::bot_edits::RichText::Html { source });
-            let request = crate::bot_edits::inline(q.msg_id.clone(), message, rich.as_ref(), None)?;
+            let mut request =
+                crate::bot_edits::inline(q.msg_id.clone(), message, rich.as_ref(), None)?;
+            if let Some(rich) = &mut request.rich_message {
+                crate::rich_media::prepare(&self.client, rich).await?;
+            }
             let dc = q.msg_id.dc_id();
             self.invoke_inline_dc(dc, &request).await?;
         } else if let (Some(source), tl::enums::Update::BotCallbackQuery(q)) = (rich, &query.raw) {
@@ -1415,14 +1422,16 @@ impl NativeBot {
                 .await
                 .map_err(anyhow::Error::from_boxed)?
                 .context("callback peer missing")?;
-            self.client
-                .invoke(&crate::bot_edits::rich(
-                    peer,
-                    q.msg_id,
-                    &crate::bot_edits::RichText::Html { source },
-                    content.reply_markup,
-                )?)
-                .await?;
+            let mut request = crate::bot_edits::rich(
+                peer,
+                q.msg_id,
+                &crate::bot_edits::RichText::Html { source },
+                content.reply_markup,
+            )?;
+            if let Some(rich) = &mut request.rich_message {
+                crate::rich_media::prepare(&self.client, rich).await?;
+            }
+            self.client.invoke(&request).await?;
         } else {
             let tl::enums::Update::BotCallbackQuery(raw) = &query.raw else {
                 anyhow::bail!("not a callback")

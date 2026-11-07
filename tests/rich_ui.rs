@@ -83,6 +83,93 @@ fn rich_edits_never_set_text_entities_or_media_in_parallel() {
     );
 }
 #[test]
+fn rich_switch_inline_buttons_keep_native_types_and_only_callbacks_use_link_style() {
+    use atarustia::rich;
+    let appearance = Appearance {
+        style: Style::Link,
+        emoji_id: None,
+    };
+    for same_chat in [false, true] {
+        let action = Action::SwitchInline {
+            query: "a\"<&>".into(),
+            same_chat,
+        };
+        let html = rich::styled_button_html("Switch", None, None, Some(&action), Some(&appearance));
+        assert!(html.contains(if same_chat {
+            "type=\"switch_inline_query_current_chat\""
+        } else {
+            "type=\"switch_inline_query\""
+        }));
+        assert!(html.contains("query=\"a&quot;&lt;&amp;&gt;\""));
+        assert!(!html.contains("style=\"link\""));
+        let result = atarustia::rich_html::to_plain(&html, &Default::default());
+        assert!(
+            matches!(&result.rows[0][0].key.action,Some(Action::SwitchInline {query,same_chat:actual}) if *actual==same_chat && query=="a\"<&>")
+        );
+        let mut builder = RichScreen::new();
+        let marker = builder
+            .styled_tap(
+                Key {
+                    text: "Switch".into(),
+                    url: None,
+                    action: Some(action),
+                },
+                appearance.clone(),
+            )
+            .unwrap();
+        builder.html(&marker, "Switch");
+        let mut forms = Forms::default();
+        let (id, _) = forms.create(builder.finish(), 9, vec![]).unwrap();
+        let source = forms.rich_source(&id).unwrap();
+        assert!(source.contains("switch_inline_query"));
+        assert!(!source.contains("callback_data"));
+        forms.plain_fallback(&id);
+        let article = grammers_client::update::Article::new("", forms.render(&id, 0).unwrap());
+        let tl::enums::InputBotInlineMessage::Text(content) = article.raw.send_message else {
+            panic!()
+        };
+        let Some(tl::enums::ReplyMarkup::ReplyInlineMarkup(markup)) = content.reply_markup else {
+            panic!()
+        };
+        let tl::enums::KeyboardInlineButtonRow::Row(row) = &markup.rows[0];
+        let tl::enums::KeyboardInlineButton::Button(button) = &row.buttons[0];
+        assert!(
+            matches!(&button.r#type,tl::enums::InlineButtonType::SwitchInline(value) if value.same_peer==same_chat)
+        );
+    }
+    assert!(
+        rich::styled_button_html(
+            "Close",
+            Some("f:token"),
+            None,
+            Some(&Action::Close),
+            Some(&appearance)
+        )
+        .contains("style=\"link\"")
+    );
+    for action in [
+        Action::Disabled,
+        Action::Copy {
+            text: "copy".into(),
+        },
+    ] {
+        assert!(
+            !rich::styled_button_html("x", None, None, Some(&action), Some(&appearance))
+                .contains("style=\"link\"")
+        );
+    }
+    assert!(
+        !rich::styled_button_html(
+            "Open",
+            None,
+            Some("https://example.com"),
+            None,
+            Some(&appearance)
+        )
+        .contains("style=\"link\"")
+    );
+}
+#[test]
 fn caption_clear_and_keyboard_only_edit_have_distinct_wire_flags() {
     let caption = bot_edits::caption(peer(), 42, "", false, None).unwrap();
     assert_eq!(caption.message.as_deref(), Some(""));

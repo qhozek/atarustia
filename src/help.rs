@@ -484,6 +484,13 @@ impl Canvas {
             pages,
             html: true,
             rich_html: Some(crate::rich_html::to_rich(&self.rich.join("\n"))),
+            rich_button_appearance: vec![
+                crate::markup::Appearance {
+                    style: crate::markup::Style::Link,
+                    emoji_id: None
+                };
+                self.keys.len()
+            ],
             rich_buttons: self.keys,
             buttons,
             link_preview: false,

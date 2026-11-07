@@ -80,6 +80,12 @@ Help, конфигуратор и rich-builder используют общий n
 Raw callbacks без объявленного действия отключены; атрибуты HTML канонизируются токенизатором.
 [Реализация, отличие retry policy и границы](RICH_MESSAGES.md).
 
+По документации Ataraxia `docs@7f0a1ec` и Telegram Bot API дополнительно исправлены
+switch-inline кнопки, callback-only стиль `link` и исключение обычного текста из rich form.
+HTML-фото help подготавливаются через uploadMedia и InputRichFilePhoto перед inline-ответом
+и rich edit, без промежуточного сообщения. Это пока не общий rich media/blocks API и не
+live-подтверждение отображения help; ограничения и область поддержки указаны в RICH_MESSAGES.md.
+
 ## Зафиксировано
 
 - `web-resources/index.html`, `static/app.js`, `static/app.css`, `static/metal.js`,

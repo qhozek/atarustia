@@ -3,6 +3,36 @@
 Reference: Ataraxia `122c2692391b1bfc40456270b7ff998c2ee10af8`,
 `ataraxia/inline/screens.py`.
 
+Documentation reviewed: Ataraxia docs branch `7f0a1ec0ed862ad24b73ecaeefc0f6ee67b10cbb`,
+chapters 6–8; Telegram [rich formatting](https://core.telegram.org/bots/api/rich-messages.md),
+[rich inline content](https://core.telegram.org/bots/api/types/inputrichmessagecontent.md),
+[rich buttons](https://core.telegram.org/bots/api/types/richmessagebutton.md).
+
+## Documented API corrections
+
+- Rich switch-inline actions emit `switch_inline_query` or
+  `switch_inline_query_current_chat`, with escaped query attributes. Both declared
+  actions and raw rich switch tags preserve their type in structured fallback.
+- `style="link"` is emitted only for callback buttons, never URL/copy/switch/disabled.
+- Help's in-text navigation uses upstream `Screen.tap`'s default link style.
+- Form rich bodies no longer populate ordinary message text alongside rich content.
+- Help's external HTML photo blocks are prepared before inline answers and rich edits:
+  `messages.uploadMedia` resolves the photo, HTML uses `tg://photo?id=...`, and
+  `InputRichMessageHTML.files` carries the resulting `InputRichFilePhoto`. No staging
+  message is posted. The standard banner uses the original bundled PNG; custom URLs
+  retain the existing HTTPS/no-credentials policy and are fetched by Telegram.
+- Prepared inline snapshots retain the uploaded photo reference without rotating
+  callbacks. Updating the snapshot uses compare-and-replace so a stale upload cannot
+  overwrite a newer form revision.
+
+This photo preparation currently covers HTML photo blocks in form inline delivery,
+native rich callback edits, and bot `/help`. It is not a general Markdown/video/audio
+uploader, outgoing blocks API, or complete validation of all Telegram rich limits.
+Uploads on separate re-renders are not yet deduplicated; no durable photo cache is
+introduced. File-reference expiry still propagates as an error instead of silently
+dropping the image. Local tests inspect binding and serialized media references;
+server acceptance and actual visuals still need live Telegram verification.
+
 ## Rendering
 
 `src/rich_html.rs` owns shared rich source normalization and structured plain fallback.

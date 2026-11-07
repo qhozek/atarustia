@@ -164,6 +164,15 @@ pub fn button_html(
             "<tg-button type=\"copy_text\" text=\"{}\">{text}</tg-button>",
             escape(copy)
         ),
+        Some(crate::forms::Action::SwitchInline { query, same_chat }) => format!(
+            "<tg-button type=\"{}\" query=\"{}\">{text}</tg-button>",
+            if *same_chat {
+                "switch_inline_query_current_chat"
+            } else {
+                "switch_inline_query"
+            },
+            escape(query)
+        ),
         _ => format!("<tg-button type=\"disabled\">{text}</tg-button>"),
     }
 }
@@ -183,7 +192,7 @@ pub fn styled_button_html(
         crate::markup::Style::Primary => attrs.push_str(" style=\"primary\""),
         crate::markup::Style::Success => attrs.push_str(" style=\"success\""),
         crate::markup::Style::Danger => attrs.push_str(" style=\"danger\""),
-        crate::markup::Style::Link => attrs.push_str(" style=\"link\""),
+        crate::markup::Style::Link if token.is_some() => attrs.push_str(" style=\"link\""),
         _ => {}
     }
     let html = html.replacen("<tg-button", &format!("<tg-button{attrs}"), 1);

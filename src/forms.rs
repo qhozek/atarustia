@@ -714,6 +714,18 @@ impl Forms {
             unit.delivery_error = Some(error);
         }
     }
+    pub(crate) fn cache_prepared_result(
+        &mut self,
+        id: &str,
+        before: &grammers_client::tl::enums::InputBotInlineResult,
+        after: grammers_client::tl::enums::InputBotInlineResult,
+    ) {
+        if let Some(unit) = self.units.get_mut(id)
+            && unit.inline_snapshot.as_ref() == Some(before)
+        {
+            unit.inline_snapshot = Some(after);
+        }
+    }
     pub(crate) fn take_delivery_error(&mut self, id: &str) -> Option<crate::botapi::ApiError> {
         self.units
             .get_mut(id)
@@ -826,25 +838,9 @@ impl Forms {
             let mut rich = source.clone();
             for (index, key) in unit.screen.rich_buttons.iter().enumerate() {
                 let token = if let Some(action) = &key.action {
-                    if matches!(
+                    if !matches!(
                         action,
-                        Action::Page { .. }
-                            | Action::Close
-                            | Action::Module { .. }
-                            | Action::Help { .. }
-                            | Action::HelpNavigate { .. }
-                            | Action::HelpToggle { .. }
-                            | Action::HelpUnhideAll { .. }
-                            | Action::HelpSettings { .. }
-                            | Action::ConfigOpen { .. }
-                            | Action::ConfigToggle { .. }
-                            | Action::ConfigStep { .. }
-                            | Action::ConfigReset { .. }
-                            | Action::ConfigSet { .. }
-                            | Action::ConfigInput { .. }
-                            | Action::Configure { .. }
-                            | Action::Settings { .. }
-                            | Action::SettingsMaintenance { .. }
+                        Action::Copy { .. } | Action::SwitchInline { .. } | Action::Disabled
                     ) {
                         let token = format!("f:{}", &crate::web::random_token()[..32]);
                         self.callbacks
@@ -1000,9 +996,9 @@ impl Forms {
         let message = if let Some(pages) = fallback_pages {
             pages[page].clone()
         } else if let Some(rich) = unit.rich_render.as_ref().filter(|_| !unit.rich_failed) {
-            InputMessage::new().text(body).rich_message(
-                grammers_client::message::InputRichMessage::html(rich.clone()),
-            )
+            InputMessage::new().rich_message(grammers_client::message::InputRichMessage::html(
+                rich.clone(),
+            ))
         } else if unit.screen.html {
             InputMessage::new().html(body)
         } else {
@@ -1016,6 +1012,34 @@ impl Forms {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_inline_snapshot_keeps_callbacks_and_cannot_replace_new_revision() {
+        let (forms, id, token) = updater_fixture();
+        let mut forms = forms.lock().unwrap();
+        let before = forms.inline_result(&id).unwrap();
+        let mut prepared = before.clone();
+        let grammers_client::tl::enums::InputBotInlineResult::Result(article) = &mut prepared
+        else {
+            panic!()
+        };
+        article.title = Some("prepared media".into());
+        forms.cache_prepared_result(&id, &before, prepared.clone());
+        assert_eq!(forms.inline_result(&id).unwrap(), prepared);
+        assert!(forms.click(&token, 1).is_ok());
+        forms
+            .replace(
+                &id,
+                Screen {
+                    text: "new revision".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let next = forms.inline_result(&id).unwrap();
+        forms.cache_prepared_result(&id, &before, prepared);
+        assert_eq!(forms.inline_result(&id).unwrap(), next);
+        assert!(forms.click(&token, 1).is_err());
+    }
     #[test]
     fn delivery_errors_preserve_server_rejection_and_are_consumed_once() {
         let (forms, id, _) = updater_fixture();

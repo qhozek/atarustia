@@ -349,6 +349,44 @@ async fn handle_delivery(context: &Context, update: &Update) -> Result<bool> {
         } else {
             vec![]
         };
+        if authorized {
+            let before = results.first().cloned();
+            for result in &mut results {
+                if let grammers_client::tl::enums::InputBotInlineResult::Result(article) = result
+                    && let grammers_client::tl::enums::InputBotInlineMessage::RichMessage(message) =
+                        &mut article.send_message
+                {
+                    let bot = context
+                        .bot
+                        .read()
+                        .await
+                        .clone()
+                        .context("inline bot unavailable")?;
+                    if let Err(error) =
+                        crate::rich_media::prepare(&bot.bot.client, &mut message.rich_message).await
+                    {
+                        context.forms.lock().unwrap().record_delivery_error(
+                            unit,
+                            crate::botapi::ApiError::from_error("prepareRichMedia", error),
+                        );
+                        query
+                            .answer(Vec::<grammers_client::tl::enums::InputBotInlineResult>::new())
+                            .private()
+                            .cache_time(0)
+                            .send()
+                            .await?;
+                        return Ok(true);
+                    }
+                }
+            }
+            if let (Some(before), Some(after)) = (before, results.first()) {
+                context
+                    .forms
+                    .lock()
+                    .unwrap()
+                    .cache_prepared_result(unit, &before, after.clone());
+            }
+        }
         loop {
             match query
                 .answer(results.clone())
@@ -607,6 +645,24 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         .unwrap_or(context.owner),
                     vec![context.owner],
                 )?;
+                let mut body = body;
+                let source = context.forms.lock().unwrap().rich_source(&id);
+                if let Some(source) = source {
+                    let mut rich = grammers_client::message::InputRichMessage::html(source).raw;
+                    let bot = context
+                        .bot
+                        .read()
+                        .await
+                        .clone()
+                        .context("inline bot unavailable")?;
+                    let prepared = crate::rich_media::prepare(&bot.bot.client, &mut rich).await;
+                    if let Err(error) = prepared {
+                        context.forms.lock().unwrap().remove(&id);
+                        return Err(error);
+                    }
+                    body =
+                        body.rich_message(grammers_client::message::InputRichMessage { raw: rich });
+                }
                 let result = m.respond(body).await;
                 match result {
                     Ok(sent) => context.forms.lock().unwrap().bind_message(
