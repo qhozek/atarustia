@@ -66,6 +66,16 @@ authorization errors and unrelated RPC errors propagate without an automatic sec
 plain send. A failed bot form send is not silently retried through the user account.
 This is deliberately narrower than upstream's broad BadRequest retry.
 
+Inline edit builders normalize an empty `replyInlineMarkup` (including rows with
+no buttons) to an omitted markup field. This matches TDLib's inline edit path:
+`ReplyMarkup.cpp` maps an empty inline keyboard to null, and
+`InlineMessageManager.cpp` passes that null to `messages.editInlineBotMessage`.
+It avoids the reported `REPLY_MARKUP_INVALID` when updater confirmation buttons
+are replaced by buttonless progress/failure/restart screens. Nonempty retry and
+navigation keyboards are retained. Chat edits keep their existing independent
+markup behavior. Regression tests serialize/deserialize the updater's actual
+inline edit request; live server verification is still required.
+
 ## Local verification and limits
 
 `tests/fixtures/rich_html.json` contains 18 vectors from pure reference definitions.

@@ -84,6 +84,60 @@ fn repeated_inline_queries_do_not_expire_the_displayed_update_button() {
     );
 }
 #[test]
+fn updater_progress_inline_edit_omits_empty_keyboard_on_the_wire() {
+    use atarustia::bot_edits;
+    use tl::{Deserializable, Serializable};
+    let id: tl::enums::InputBotInlineMessageId = tl::types::InputBotInlineMessageId64 {
+        dc_id: 2,
+        owner_id: 123,
+        id: 42,
+        access_hash: 456,
+    }
+    .into();
+    let mut forms = Forms::default();
+    let ui = Ui { english: true };
+    let (unit, _) = forms
+        .create(ui.card(&report(), false), 123, vec![])
+        .unwrap();
+    for screen in [
+        ui.progress(&[], 0),
+        ui.progress(&[(0, 10)], 1),
+        ui.failed("git failure", None),
+        ui.restarting(),
+    ] {
+        let body = forms.replace(&unit, screen).unwrap();
+        let request = bot_edits::inline(id.clone(), body, None, None).unwrap();
+        assert!(
+            request.reply_markup.is_none(),
+            "no empty replyInlineMarkup in updater edit"
+        );
+        assert!(
+            request
+                .message
+                .as_ref()
+                .is_some_and(|text| !text.is_empty())
+        );
+        let bytes = request.to_bytes();
+        let mut cursor = tl::deserialize::Cursor::from_slice(&bytes[4..]);
+        let wire = tl::functions::messages::EditInlineBotMessage::deserialize(&mut cursor).unwrap();
+        assert!(wire.reply_markup.is_none());
+        assert_eq!(wire.message, request.message);
+    }
+    let body = forms
+        .replace(
+            &unit,
+            ui.failed(
+                "build failure",
+                Some((&report().current, &report().incoming)),
+            ),
+        )
+        .unwrap();
+    let request = bot_edits::inline(id, body, None, None).unwrap();
+    assert!(
+        matches!(request.reply_markup,Some(tl::enums::ReplyMarkup::ReplyInlineMarkup(markup)) if !markup.rows.is_empty())
+    );
+}
+#[test]
 fn original_card_layout_styles_and_pinned_actions_are_preserved() {
     let ui = Ui { english: false };
     let card = ui.card(&report(), false);

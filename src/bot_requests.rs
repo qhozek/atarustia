@@ -523,7 +523,7 @@ impl EditFields {
             message: self.text,
             entities: self.entities,
             media: self.media,
-            reply_markup: self.markup,
+            reply_markup: crate::bot_edits::inline_markup(self.markup),
             rich_message: self.rich,
         }
     }

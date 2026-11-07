@@ -91,7 +91,7 @@ fn caption_clear_and_keyboard_only_edit_have_distinct_wire_flags() {
     assert!(keyboard.message.is_none() && keyboard.entities.is_none());
     assert!(keyboard.reply_markup.is_some());
     let inline = bot_edits::inline_keyboard(inline_id(), &[]).unwrap();
-    assert!(inline.message.is_none() && inline.entities.is_none() && inline.reply_markup.is_some());
+    assert!(inline.message.is_none() && inline.entities.is_none() && inline.reply_markup.is_none());
     let inline = bot_edits::inline_caption(inline_id(), "", false, None).unwrap();
     assert_eq!(inline.message.as_deref(), Some(""));
     assert_eq!(inline.entities, Some(vec![]));
@@ -103,6 +103,69 @@ fn caption_clear_and_keyboard_only_edit_have_distinct_wire_flags() {
     ));
     assert!(bot_edits::caption(peer(), 0, "x", false, None).is_err());
     assert!(bot_edits::caption(peer(), 42, &"🦀".repeat(513), false, None).is_err());
+}
+#[test]
+fn inline_edits_normalize_empty_rows_for_text_rich_caption_and_keyboard() {
+    use atarustia::{
+        bot_requests::{Edit, Preview, Text},
+        markup::Keyboard,
+    };
+    use grammers_client::message::{Button, ReplyMarkup};
+    let rich = RichText::Html {
+        source: "<h2>Progress</h2>".into(),
+    };
+    for value in [None, Some(&rich)] {
+        let message = InputMessage::new()
+            .text("Progress")
+            .reply_markup(ReplyMarkup::from_buttons(&[vec![]]));
+        assert!(
+            bot_edits::inline(inline_id(), message, value, None)
+                .unwrap()
+                .reply_markup
+                .is_none()
+        );
+    }
+    assert!(
+        bot_edits::inline_caption(inline_id(), "", false, Some(&[]))
+            .unwrap()
+            .reply_markup
+            .is_none()
+    );
+    let keyboard = Keyboard::Inline { rows: vec![vec![]] };
+    for edit in [
+        Edit::Keyboard,
+        Edit::Text {
+            text: Text {
+                text: "Progress".into(),
+                ..Default::default()
+            },
+            preview: Preview::default(),
+        },
+        Edit::Rich { rich },
+    ] {
+        assert!(
+            edit.fields(Some(&keyboard))
+                .unwrap()
+                .inline(inline_id())
+                .reply_markup
+                .is_none()
+        );
+    }
+    let markup =
+        ReplyMarkup::from_buttons(&[vec![], vec![Button::data("Close", b"close")], vec![]]);
+    let request = bot_edits::inline(
+        inline_id(),
+        InputMessage::new().text("x").reply_markup(markup),
+        None,
+        None,
+    )
+    .unwrap();
+    let Some(tl::enums::ReplyMarkup::ReplyInlineMarkup(markup)) = request.reply_markup else {
+        panic!()
+    };
+    assert_eq!(markup.rows.len(), 1);
+    let tl::enums::KeyboardInlineButtonRow::Row(row) = &markup.rows[0];
+    assert_eq!(row.buttons.len(), 1);
 }
 #[test]
 fn styled_rich_callbacks_keep_appearance_and_security_after_fallback() {

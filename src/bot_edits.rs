@@ -7,6 +7,20 @@ use grammers_client::{
 use grammers_session::types::PeerRef;
 use serde::{Deserialize, Serialize};
 
+/// Inline edits remove buttons by omitting markup (as TDLib does), not by
+/// sending an empty replyInlineMarkup, which Telegram rejects.
+pub fn inline_markup(markup: Option<tl::enums::ReplyMarkup>) -> Option<tl::enums::ReplyMarkup> {
+    match markup {
+        Some(tl::enums::ReplyMarkup::ReplyInlineMarkup(mut markup)) => {
+            markup
+                .rows
+                .retain(|tl::enums::KeyboardInlineButtonRow::Row(row)| !row.buttons.is_empty());
+            (!markup.rows.is_empty()).then_some(tl::enums::ReplyMarkup::ReplyInlineMarkup(markup))
+        }
+        other => other,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RichText {
@@ -100,7 +114,7 @@ pub fn inline(
         } else {
             content.entities
         },
-        reply_markup: content.reply_markup,
+        reply_markup: inline_markup(content.reply_markup),
         rich_message: rich.map(RichText::to_tl).transpose()?,
     })
 }
@@ -193,7 +207,7 @@ pub fn inline_caption(
         message: base.message,
         entities: base.entities,
         media: None,
-        reply_markup: base.reply_markup,
+        reply_markup: inline_markup(base.reply_markup),
         rich_message: None,
     })
 }
