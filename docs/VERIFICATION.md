@@ -2,6 +2,11 @@
 
 Локальная среда: Windows x86_64, Rust 1.99.1 GNU. Проверки выполняются без Telegram credentials.
 
+Updater button regression: повторные inline queries одной unit возвращают тот же snapshot,
+а не инвалидируют токены уже показанной клавиатуры. Проверены Update action с pinned SHA,
+отказ постороннему, replacement, rich/plain fallback, TTL и удаление формы. Live self-update
+этими offline-тестами не подтверждается.
+
 P0.1: `tests/upstream_manifest.rs` сверяет pin/policy, command ownership/aliases, все langpack
 values и assets с generated inventory. `scripts/test_upstream_contract.py` отдельно проверяет
 static extraction без исполнения, строгие YAML failures, Git blobs вместо dirty checkout,

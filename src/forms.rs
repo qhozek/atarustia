@@ -166,6 +166,8 @@ struct Unit {
     inline_command: Option<String>,
     inline_id: Option<String>,
     destination: Option<(i64, i32)>,
+    // A repeated Telegram inline query is a read, not a new keyboard revision.
+    inline_snapshot: Option<grammers_client::tl::enums::InputBotInlineResult>,
 }
 #[derive(Clone)]
 pub struct Gate {
@@ -414,6 +416,7 @@ impl Forms {
                 inline_command: None,
                 inline_id: None,
                 destination: None,
+                inline_snapshot: None,
             },
         );
         let message = match self.render(&id, 0) {
@@ -596,19 +599,30 @@ impl Forms {
         &mut self,
         id: &str,
     ) -> Result<grammers_client::tl::enums::InputBotInlineResult> {
+        self.clean();
+        let unit = self.units.get(id).context("form expired")?;
+        if let Some(result) = &unit.inline_snapshot {
+            return Ok(result.clone());
+        }
         let body = self.render(id, 0)?;
-        crate::media::inline_result(
+        let result = crate::media::inline_result(
             id,
             "ataraxia",
             body,
             self.media(id).as_ref(),
             self.rich_source(id).as_deref(),
-        )
+        )?;
+        self.units
+            .get_mut(id)
+            .context("form expired")?
+            .inline_snapshot = Some(result.clone());
+        Ok(result)
     }
     pub fn plain_fallback(&mut self, id: &str) -> bool {
         if let Some(unit) = self.units.get_mut(id) {
             if unit.screen.rich_html.is_some() && !unit.rich_failed {
                 unit.rich_failed = true;
+                unit.inline_snapshot = None;
                 true
             } else {
                 false
@@ -641,6 +655,7 @@ impl Forms {
     pub fn render(&mut self, id: &str, page: usize) -> Result<InputMessage> {
         self.clean();
         let unit = self.units.get_mut(id).context("form expired")?;
+        unit.inline_snapshot = None;
         for token in unit.tokens.drain(..) {
             self.callbacks.remove(&token);
         }
@@ -864,6 +879,64 @@ impl Forms {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn duplicate_inline_reads_preserve_rich_tokens_but_fallback_and_expiry_invalidate_them() {
+        let mut builder = crate::rich::RichScreen::new();
+        let tap = builder
+            .tap(Key {
+                text: "Go".into(),
+                action: Some(Action::Close),
+                url: None,
+            })
+            .unwrap();
+        builder.html(&tap, "Go");
+        let mut forms = Forms::default();
+        let (id, _) = forms.create(builder.finish(), 1, vec![2]).unwrap();
+        forms.inline_result(&id).unwrap();
+        let tokens = forms.units[&id].tokens.clone();
+        let rich = forms.rich_source(&id).unwrap();
+        for _ in 0..3 {
+            forms.inline_result(&id).unwrap();
+        }
+        assert_eq!(forms.units[&id].tokens, tokens);
+        assert_eq!(forms.rich_source(&id).unwrap(), rich);
+        assert!(forms.click(&tokens[0], 1).is_ok());
+        assert!(forms.click(&tokens[0], 2).is_ok());
+        assert!(forms.click(&tokens[0], 3).is_err());
+        assert!(forms.plain_fallback(&id));
+        forms.inline_result(&id).unwrap();
+        assert!(forms.rich_source(&id).is_none());
+        assert!(forms.click(&tokens[0], 1).is_err());
+        let fallback_tokens = forms.units[&id].tokens.clone();
+        forms.inline_result(&id).unwrap();
+        assert_eq!(forms.units[&id].tokens, fallback_tokens);
+        forms.units.get_mut(&id).unwrap().expires = Instant::now() - Duration::from_secs(1);
+        assert!(
+            forms.inline_result(&id).is_err(),
+            "cached form must not outlive its TTL"
+        );
+        assert!(forms.click(&fallback_tokens[0], 1).is_err());
+    }
+
+    #[test]
+    fn explicitly_removed_inline_form_is_not_returned_from_snapshot() {
+        let mut forms = Forms::default();
+        let (id, _) = forms
+            .create(
+                Screen {
+                    text: "hi".into(),
+                    ..Default::default()
+                },
+                1,
+                vec![],
+            )
+            .unwrap();
+        forms.inline_result(&id).unwrap();
+        let token = forms.units[&id].tokens[0].clone();
+        forms.remove(&id);
+        assert!(forms.inline_result(&id).is_err());
+        assert!(forms.click(&token, 1).is_err());
+    }
     #[test]
     fn rich_taps_are_bound_and_plain_fallback_preserves_action() {
         let mut builder = crate::rich::RichScreen::new();

@@ -31,6 +31,58 @@ fn content(input: InputMessage) -> tl::types::InputBotInlineMessageText {
     };
     text
 }
+fn update_token(message: tl::enums::InputBotInlineMessage) -> String {
+    let tl::enums::InputBotInlineMessage::Text(text) = message else {
+        panic!("expected updater text")
+    };
+    let tl::enums::ReplyMarkup::ReplyInlineMarkup(markup) = text.reply_markup.unwrap() else {
+        panic!("expected inline keyboard")
+    };
+    let tl::enums::KeyboardInlineButtonRow::Row(row) = &markup.rows[0];
+    let tl::enums::KeyboardInlineButton::Button(button) = &row.buttons[0];
+    let tl::enums::InlineButtonType::Callback(callback) = &button.r#type else {
+        panic!("expected update callback")
+    };
+    String::from_utf8(callback.data.clone()).unwrap()
+}
+fn result_message(result: tl::enums::InputBotInlineResult) -> tl::enums::InputBotInlineMessage {
+    let tl::enums::InputBotInlineResult::Result(result) = result else {
+        panic!("expected updater inline result")
+    };
+    result.send_message
+}
+#[test]
+fn repeated_inline_queries_do_not_expire_the_displayed_update_button() {
+    let mut forms = Forms::default();
+    let (id, _) = forms
+        .create(Ui { english: true }.card(&report(), false), 123, vec![])
+        .unwrap();
+    // Telegram may request the same unit again before/after sending the first result.
+    let shown = update_token(result_message(forms.inline_result(&id).unwrap()));
+    let repeated = update_token(result_message(forms.inline_result(&id).unwrap()));
+    assert_eq!(
+        shown, repeated,
+        "reading the same form must not rotate callbacks"
+    );
+    let click = forms
+        .click(&shown, 123)
+        .expect("the displayed Update button must remain valid");
+    assert!(
+        matches!(click.action, Action::Update { current, incoming, retry: false }
+        if current == "a".repeat(40) && incoming == "b".repeat(40))
+    );
+    assert!(
+        forms.click(&shown, 999).is_err(),
+        "authorization must not be relaxed"
+    );
+    forms
+        .replace(&id, Ui { english: true }.progress(&[], 0))
+        .unwrap();
+    assert!(
+        forms.click(&shown, 123).is_err(),
+        "replaced buttons must still expire"
+    );
+}
 #[test]
 fn original_card_layout_styles_and_pinned_actions_are_preserved() {
     let ui = Ui { english: false };
