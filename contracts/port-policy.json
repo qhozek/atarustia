@@ -2,14 +2,33 @@
   "schema_version": 1,
   "goal": "Current-main Ataraxia user-facing behavior and presentation implemented in Rust",
   "implementation_identity": [
-    {"id": "rust-core", "scope": "implementation", "rule": "Rust/Tokio and Cargo replace Python/asyncio and uv; preserve observable command behavior"},
+    {"id": "rust-core", "scope": "implementation", "rule": "Rust/Tokio own the core and built-ins; Cargo builds the core, while CPython and a managed Python dependency environment support compatible external code; preserve observable command behavior"},
     {"id": "truthful-build", "scope": "presentation", "rule": "Rust repository, commit, transport and layer information must remain truthful; surrounding layout follows upstream"},
     {"id": "legacy-web", "scope": "extension", "rule": "Old web UI is explicit --web opt-in, outside current-main parity; do not delete existing user data"}
   ],
-  "unresolved_decisions": [
-    {"id": "python-runtime", "priority": "P0.2", "status": "decision_required", "question": "Must unmodified Python modules and Python .e run, or is only a Rust-native extension ecosystem required?"},
-    {"id": "file-compatibility", "priority": "P0.2", "status": "decision_required", "question": "Require bidirectional session/backup compatibility or an explicit migration-only boundary?"}
+  "accepted_decisions": [
+    {
+      "id": "python-runtime",
+      "priority": "P0.2",
+      "status": "accepted",
+      "implementation_status": "not_implemented",
+      "decision": "Rust core and built-in modules; retain CPython for Python .e and external Python modules through a compatibility bridge",
+      "user_basis": "Performance and efficiency are the goal, but Python support should remain",
+      "design": "docs/decisions/0001-python-and-data-compatibility.md",
+      "requirements": ["one Rust owner per Telegram session", "real Python syntax and async semantics", "no Rhai presented as Python", "published per-feature compatibility matrix", "trusted unsandboxed extensions", "benchmarks before performance claims"]
+    },
+    {
+      "id": "file-compatibility",
+      "priority": "P0.2",
+      "status": "accepted",
+      "implementation_status": "partial_import_only",
+      "decision": "Bidirectional versioned session and backup import/export with a lossless compatible profile; never concurrently share a live session or data directory",
+      "user_basis": "Bidirectional compatibility explicitly selected",
+      "design": "docs/decisions/0001-python-and-data-compatibility.md",
+      "requirements": ["separate source/destination directories", "no silent data loss", "preserve portable unknown fields or reject export", "unsupported native extensions fail compatibility export explicitly", "no sessions or master key in ordinary backups", "synthetic roundtrip and separate live acceptance"]
+    }
   ],
+  "unresolved_decisions": [],
   "known_deviations_not_accepted_as_parity": [
     "Rhai is not Python .e or unmodified Python module compatibility",
     "Security/loader/backup argument and screen parity remains incomplete",

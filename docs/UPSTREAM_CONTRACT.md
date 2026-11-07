@@ -82,7 +82,8 @@ Drift-report показывает added/removed/changed файлы, команд
    Добавить новые/удалить исчезнувшие команды. Только после review обновить `reviewed_revision`.
 3. Обновить extractor, если изменились структура AST, decorators, YAML или протокол inventory.
    Расширить synthetic tests. Не подменять неизвестный security decorator значением OWNER.
-4. Проверить политику исключений. P0.2 решения не принимать молча в manifest.
+4. Проверить политику исключений. Принятые решения P0.2 менять только через review ADR и policy,
+   не молча в generated manifest.
 5. Сгенерировать **явный** candidate-файл:
 
    ```sh
@@ -117,5 +118,6 @@ Rust-каталог/ownership/aliases, pin/policy, langpack values и assets. В
 ## Что P0.1 не закрывает
 
 Нет новых runtime-команд, изменения авторизации, security/backup/loader поведения или новой
-модульной системы. Не решён P0.2. Нет доказательства визуального/поведенческого/Telegram 1:1.
+модульной системы. Решения P0.2 отдельно приняты в [ADR-0001](decisions/0001-python-and-data-compatibility.md),
+но не реализованы обновлением manifest. Нет доказательства визуального/поведенческого/Telegram 1:1.
 Для этого нужны будущие differential payload/state tests и live acceptance из плана переписи.

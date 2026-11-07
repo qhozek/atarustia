@@ -1,5 +1,9 @@
 # Импорт резервных копий
 
+P0.2 принимает двусторонние portable backups, но **обратный совместимый экспорт пока не реализован**.
+Текущий review/sanitizing importer не является lossless codec.
+[Границы и требования ADR-0001](decisions/0001-python-and-data-compatibility.md).
+
 ```sh
 cargo run --locked -- --data-root ./new-data --import-backup old.backup --import-owner 123456789
 ```

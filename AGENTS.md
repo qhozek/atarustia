@@ -18,3 +18,8 @@ current main, pinned for this port at 122c2692391b1bfc40456270b7ff998c2ee10af8.
 - `contracts/upstream-manifest.json` is the generated reference inventory, not a completion claim.
   Read `docs/UPSTREAM_CONTRACT.md` before changing the pin. Never edit generated requirements
   to match an incomplete Rust implementation. Argument scenarios and exception policy need review.
+- P0.2 decisions are accepted in `docs/decisions/0001-python-and-data-compatibility.md`:
+  Rust core/built-ins, CPython compatibility bridge for Python `.e` and external modules,
+  bidirectional offline session/backup codecs. These are requirements, not implemented features.
+  Do not substitute Rhai for Python, run duplicate Telegram session owners or silently discard
+  data in compatibility exports. Performance claims require reproducible measurements.

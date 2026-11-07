@@ -6,10 +6,18 @@
 ## P0.1 — reference manifest и drift guard
 
 Добавлены `contracts/upstream-manifest.json`, карточки поведения всех 66 команд и явная policy
-с незакрытыми решениями P0.2. Static extractor читает Git blobs/AST/langpacks без исполнения
+с отдельно зафиксированными решениями P0.2. Static extractor читает Git blobs/AST/langpacks без исполнения
 оригинала. CI сверяет pinned manifest и ежедневно проверяет drift remote main; Rust-тесты
 проверяют каталог/aliases/resources локально. [Инструкция и границы](UPSTREAM_CONTRACT.md).
 Manifest фиксирует требования, включая ещё не перенесённые API: это не completion certificate.
+
+## P0.2 — архитектура расширений и данных
+
+Выбраны Rust-ядро/встроенные команды и CPython compatibility bridge для Python `.e`/внешних
+модулей. Для сессий и backup требуется двусторонний versioned import/export без silent loss,
+не совместная работа с одной live session. [ADR-0001](decisions/0001-python-and-data-compatibility.md).
+Решение принято, но bridge/codecs ещё не реализованы: `.e` пока Rhai, Python modules не запускаются,
+данные имеют лишь прежний частичный importer. Заявления о производительности требуют benchmark.
 
 ## Переход на текущую main — этап 1
 

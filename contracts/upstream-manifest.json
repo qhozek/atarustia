@@ -10805,11 +10805,47 @@
         "same-client screenshot comparison"
       ]
     },
+    "accepted_decisions": [
+      {
+        "decision": "Rust core and built-in modules; retain CPython for Python .e and external Python modules through a compatibility bridge",
+        "design": "docs/decisions/0001-python-and-data-compatibility.md",
+        "id": "python-runtime",
+        "implementation_status": "not_implemented",
+        "priority": "P0.2",
+        "requirements": [
+          "one Rust owner per Telegram session",
+          "real Python syntax and async semantics",
+          "no Rhai presented as Python",
+          "published per-feature compatibility matrix",
+          "trusted unsandboxed extensions",
+          "benchmarks before performance claims"
+        ],
+        "status": "accepted",
+        "user_basis": "Performance and efficiency are the goal, but Python support should remain"
+      },
+      {
+        "decision": "Bidirectional versioned session and backup import/export with a lossless compatible profile; never concurrently share a live session or data directory",
+        "design": "docs/decisions/0001-python-and-data-compatibility.md",
+        "id": "file-compatibility",
+        "implementation_status": "partial_import_only",
+        "priority": "P0.2",
+        "requirements": [
+          "separate source/destination directories",
+          "no silent data loss",
+          "preserve portable unknown fields or reject export",
+          "unsupported native extensions fail compatibility export explicitly",
+          "no sessions or master key in ordinary backups",
+          "synthetic roundtrip and separate live acceptance"
+        ],
+        "status": "accepted",
+        "user_basis": "Bidirectional compatibility explicitly selected"
+      }
+    ],
     "goal": "Current-main Ataraxia user-facing behavior and presentation implemented in Rust",
     "implementation_identity": [
       {
         "id": "rust-core",
-        "rule": "Rust/Tokio and Cargo replace Python/asyncio and uv; preserve observable command behavior",
+        "rule": "Rust/Tokio own the core and built-ins; Cargo builds the core, while CPython and a managed Python dependency environment support compatible external code; preserve observable command behavior",
         "scope": "implementation"
       },
       {
@@ -10834,20 +10870,7 @@
       "Live Telegram and screenshot parity have not been verified"
     ],
     "schema_version": 1,
-    "unresolved_decisions": [
-      {
-        "id": "python-runtime",
-        "priority": "P0.2",
-        "question": "Must unmodified Python modules and Python .e run, or is only a Rust-native extension ecosystem required?",
-        "status": "decision_required"
-      },
-      {
-        "id": "file-compatibility",
-        "priority": "P0.2",
-        "question": "Require bidirectional session/backup compatibility or an explicit migration-only boundary?",
-        "status": "decision_required"
-      }
-    ]
+    "unresolved_decisions": []
   },
   "schema_version": 1,
   "screens": {

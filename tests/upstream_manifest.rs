@@ -25,11 +25,27 @@ fn manifest_pin_policy_and_schema_are_explicit() {
         serde_json::from_str(include_str!("../contracts/port-policy.json")).unwrap();
     assert_eq!(m["policy"], policy);
     assert!(
-        !policy["unresolved_decisions"]
+        policy["unresolved_decisions"]
             .as_array()
             .unwrap()
             .is_empty()
     );
+    let decisions = policy["accepted_decisions"].as_array().unwrap();
+    assert_eq!(decisions.len(), 2);
+    for id in ["python-runtime", "file-compatibility"] {
+        let decision = decisions.iter().find(|d| d["id"] == id).unwrap();
+        assert_eq!(decision["status"], "accepted");
+        assert_ne!(decision["implementation_status"], "complete");
+        assert!(!decision["requirements"].as_array().unwrap().is_empty());
+        let path = decision["design"].as_str().unwrap();
+        assert!(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(path)
+                .is_file()
+        );
+    }
+    assert_eq!(decisions[0]["implementation_status"], "not_implemented");
+    assert_eq!(decisions[1]["implementation_status"], "partial_import_only");
     assert!(
         !policy["known_deviations_not_accepted_as_parity"]
             .as_array()
