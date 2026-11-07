@@ -122,7 +122,8 @@ fn styled_rich_callbacks_keep_appearance_and_security_after_fallback() {
     let (id, _) = forms.create(builder.finish(), 9, vec![]).unwrap();
     let rich = forms.rich_source(&id).unwrap();
     assert!(rich.contains("style=\"danger\""));
-    assert!(rich.contains("emoji-id=\"456\""));
+    assert!(!rich.contains("emoji-id=\"456\""));
+    assert!(rich.contains(">▫ Close</tg-button>"));
     let token = rich
         .split("data=\"")
         .nth(1)
@@ -358,4 +359,86 @@ fn normal_keyboard_appearance_is_preserved_and_replaced_callbacks_expire() {
         )
         .unwrap();
     assert!(forms.click(token, 9).is_err());
+}
+
+#[test]
+fn forms_fallback_paginates_structured_html_and_retains_navigation() {
+    let text = "🦀<&>\"\n".repeat(1500);
+    let screen = Screen {
+        text: "legacy fallback must not replace source".into(),
+        rich_html: Some(format!(
+            "<pre><code class=\"language-rust\">{}</code></pre>",
+            atarustia::output::escape(&text)
+        )),
+        ..Default::default()
+    };
+    let mut forms = Forms::default();
+    let (id, _) = forms.create(screen, 9, vec![]).unwrap();
+    assert!(forms.plain_fallback(&id));
+    let page_count = atarustia::output::pages(&text).len();
+    let mut joined = String::new();
+    for page in 0..page_count {
+        let input = forms.render(&id, page).unwrap();
+        let tl::enums::InputBotInlineMessage::Text(content) =
+            grammers_client::update::Article::new("", input)
+                .raw
+                .send_message
+        else {
+            panic!()
+        };
+        assert!(content.message.encode_utf16().count() <= atarustia::output::MESSAGE_LIMIT);
+        assert!(
+            content
+                .entities
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, tl::enums::MessageEntity::Pre(_)))
+        );
+        assert!(content.reply_markup.is_some());
+        joined.push_str(&content.message);
+    }
+    // A newline inside closing pre/code tags is content, not surrounding whitespace.
+    assert_eq!(joined, text);
+}
+
+#[test]
+fn fallback_keyboard_reserves_bottom_controls_and_bounds_extracted_rows() {
+    let raw = (0..110)
+        .map(|i| format!("<tg-button type=\"disabled\">{i}</tg-button>"))
+        .collect::<String>();
+    let screen = Screen {
+        rich_html: Some(format!(
+            "<h2>Title</h2><tg-button-row>{raw}</tg-button-row>"
+        )),
+        buttons: vec![vec![key()]],
+        ..Default::default()
+    };
+    let mut forms = Forms::default();
+    let (id, _) = forms.create(screen, 9, vec![]).unwrap();
+    forms.plain_fallback(&id);
+    let input = forms.render(&id, 0).unwrap();
+    let tl::enums::InputBotInlineMessage::Text(content) =
+        grammers_client::update::Article::new("", input)
+            .raw
+            .send_message
+    else {
+        panic!()
+    };
+    let Some(tl::enums::ReplyMarkup::ReplyInlineMarkup(markup)) = content.reply_markup else {
+        panic!()
+    };
+    let rows: Vec<_> = markup
+        .rows
+        .iter()
+        .map(|tl::enums::KeyboardInlineButtonRow::Row(row)| row)
+        .collect();
+    assert_eq!(rows.iter().map(|row| row.buttons.len()).sum::<usize>(), 100);
+    assert!(
+        rows.iter()
+            .all(|row| !row.buttons.is_empty() && row.buttons.len() <= 8)
+    );
+    let tl::enums::KeyboardInlineButton::Button(bottom) = &rows[rows.len() - 2].buttons[0];
+    assert_eq!(bottom.text, "Close");
+    let tl::enums::KeyboardInlineButton::Button(close) = &rows.last().unwrap().buttons[0];
+    assert_eq!(close.text, "✕");
 }

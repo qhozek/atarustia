@@ -659,7 +659,25 @@ impl Forms {
         for token in unit.tokens.drain(..) {
             self.callbacks.remove(&token);
         }
-        let pages = if !unit.screen.gallery.is_empty() && unit.screen.pages.is_empty() {
+        let fallback = unit
+            .rich_failed
+            .then(|| {
+                unit.screen.rich_html.as_ref().map(|source| {
+                    crate::rich_html::fallback(
+                        source,
+                        &unit.screen.rich_buttons,
+                        &unit.screen.rich_button_appearance,
+                    )
+                })
+            })
+            .flatten();
+        let fallback_pages = fallback
+            .as_ref()
+            .map(|fallback| crate::rich_html::plain_pages(&fallback.text))
+            .transpose()?;
+        let pages = if let Some(pages) = &fallback_pages {
+            vec![String::new(); pages.len()]
+        } else if !unit.screen.gallery.is_empty() && unit.screen.pages.is_empty() {
             vec![unit.screen.text.clone(); unit.screen.gallery.len()]
         } else if unit.screen.pages.is_empty() {
             crate::output::pages(&unit.screen.text)
@@ -679,24 +697,13 @@ impl Forms {
             unit.screen.button_appearance.clone()
         };
         if unit.rich_failed {
-            if let Some(fallback) = &unit.screen.config_fallback {
+            if let Some(fallback) = &fallback {
                 let fallback_styles: Vec<_> = fallback
+                    .rows
                     .iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|key| {
-                                unit.screen
-                                    .rich_buttons
-                                    .iter()
-                                    .position(|k| k.text == key.text)
-                                    .and_then(|i| unit.screen.rich_button_appearance.get(i))
-                                    .cloned()
-                                    .unwrap_or_default()
-                            })
-                            .collect()
-                    })
+                    .map(|row| row.iter().map(|key| key.appearance.clone()).collect())
                     .collect();
-                rows = fallback.iter().cloned().chain(rows).collect();
+                rows = fallback.keys().into_iter().chain(rows).collect();
                 appearances = fallback_styles.into_iter().chain(appearances).collect();
             } else {
                 rows.extend(unit.screen.rich_buttons.chunks(2).map(|r| r.to_vec()));
@@ -754,7 +761,25 @@ impl Forms {
                     ),
                 );
             }
-            unit.rich_render = Some(rich);
+            unit.rich_render = Some(crate::rich_html::to_rich(&rich));
+        }
+        // Reserve room for the bottom keyboard and navigation, as upstream fit_keyboard does.
+        let reserved = rows.iter().map(Vec::len).sum::<usize>()
+            + usize::from(unit.screen.close_button)
+            + if pages.len() > 1 {
+                1 + usize::from(page > 0) + usize::from(page + 1 < pages.len())
+            } else {
+                0
+            };
+        if let Some(fallback) = &fallback {
+            // Only extracted rows may be dropped; bottom controls must remain usable.
+            let mut room = crate::rich_html::KEYBOARD_LIMIT.saturating_sub(
+                reserved.saturating_sub(fallback.rows.iter().map(Vec::len).sum::<usize>()),
+            );
+            for row in rows.iter_mut().take(fallback.rows.len()) {
+                row.truncate(room);
+                room = room.saturating_sub(row.len());
+            }
         }
         if pages.len() > 1 {
             let mut nav = vec![];
@@ -849,6 +874,9 @@ impl Forms {
                     buttons.push(Button::data(key.text, token.into_bytes()));
                 }
             }
+            if buttons.is_empty() {
+                continue;
+            }
             keyboard.push(buttons);
             if let Some(styles) = appearances.get(row_index) {
                 for (button, style) in keyboard.last_mut().unwrap().iter_mut().zip(styles) {
@@ -862,7 +890,9 @@ impl Forms {
         } else {
             body
         };
-        let message = if let Some(rich) = unit.rich_render.as_ref().filter(|_| !unit.rich_failed) {
+        let message = if let Some(pages) = fallback_pages {
+            pages[page].clone()
+        } else if let Some(rich) = unit.rich_render.as_ref().filter(|_| !unit.rich_failed) {
             InputMessage::new().text(body).rich_message(
                 grammers_client::message::InputRichMessage::html(rich.clone()),
             )

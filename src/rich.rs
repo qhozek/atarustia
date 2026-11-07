@@ -130,7 +130,7 @@ impl RichScreen {
     pub fn finish(self) -> Screen {
         Screen {
             text: self.plain.join("\n"),
-            rich_html: Some(self.parts.join("<br>")),
+            rich_html: Some(crate::rich_html::to_rich(&self.parts.join("\n"))),
             rich_buttons: self.buttons,
             rich_button_appearance: self.appearances,
             ..Default::default()
@@ -188,6 +188,15 @@ pub fn styled_button_html(
     }
     let html = html.replacen("<tg-button", &format!("<tg-button{attrs}"), 1);
     if let Some(id) = appearance.emoji_id {
+        if matches!(
+            appearance.style,
+            crate::markup::Style::Primary
+                | crate::markup::Style::Success
+                | crate::markup::Style::Danger
+        ) {
+            // Telegram colored rich buttons use a plain icon; keep custom icons in fallback markup.
+            return html.replacen('>', ">▫ ", 1);
+        }
         html.replacen(
             '>',
             &format!("><tg-emoji emoji-id=\"{id}\">▫</tg-emoji> "),

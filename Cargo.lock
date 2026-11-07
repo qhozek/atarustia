@@ -177,6 +177,7 @@ dependencies = [
  "grammers-mtsender",
  "grammers-session",
  "hex",
+ "html5ever",
  "libc",
  "qrcode",
  "rand 0.8.8",

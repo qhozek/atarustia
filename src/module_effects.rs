@@ -346,7 +346,7 @@ async fn deliver(
                                 .await?;
                         } else if let Some(source) = rich {
                             let rich = grammers_client::message::InputRichMessage::html(source);
-                            if bot
+                            if let Err(error) = bot
                                 .bot
                                 .send_message(
                                     bot_peer,
@@ -356,8 +356,10 @@ async fn deliver(
                                         .reply_to(reply),
                                 )
                                 .await
-                                .is_err()
                             {
+                                if !crate::rich_html::rejected_api(&error) {
+                                    return Err(error.into());
+                                }
                                 context.forms.lock().unwrap().plain_fallback(&unit);
                                 let body = context.forms.lock().unwrap().render(&unit, 0)?;
                                 bot.bot.send_message(bot_peer, body.reply_to(reply)).await?;
@@ -368,10 +370,11 @@ async fn deliver(
                         Ok::<_, anyhow::Error>(())
                     }
                     .await;
-                    if sent.is_ok() {
-                        return Ok(());
+                    if sent.is_err() {
+                        context.forms.lock().unwrap().remove(&unit);
                     }
-                    context.forms.lock().unwrap().remove(&unit);
+                    // A failed bot send may have reached Telegram. Never retry it via the user.
+                    return sent;
                 }
             }
             let pages = if screen.pages.is_empty() {
@@ -511,7 +514,9 @@ pub async fn edit_screen(
         let rich = context.forms.lock().unwrap().rich_source(unit);
         if rich.is_some() {
             if let Err(error) = bot.bot.edit_callback_rich(query, body.clone(), rich).await {
-                if !context.forms.lock().unwrap().plain_fallback(unit) {
+                if !crate::rich_html::rejected_api(&error)
+                    || !context.forms.lock().unwrap().plain_fallback(unit)
+                {
                     return Err(error.into());
                 }
                 let plain = context.forms.lock().unwrap().render(unit, 0)?;

@@ -24,6 +24,7 @@ grammers-client = { version = "=0.11.0", features = ["html", "markdown", "proxy"
 grammers-session = { version = "=0.11.0", default-features = false, features = ["serde"] }
 grammers-mtsender = { version = "=0.11.0", features = ["proxy"] }
 hex = "0.4"
+html5ever = "=0.40.1"
 rand = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }

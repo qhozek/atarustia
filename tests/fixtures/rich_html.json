@@ -1,0 +1,211 @@
+{
+  "revision": "122c2692391b1bfc40456270b7ff998c2ee10af8",
+  "source": "ataraxia/inline/screens.py",
+  "vectors": [
+    {
+      "name": "blocks",
+      "plain": "head\n<b>s</b>\n<blockquote expandable>a\nb</blockquote>\nx\ntail",
+      "rich": "head<details><summary>s</summary>a<br>b</details><table><tr><td>x</td></tr></table>tail",
+      "rows": [],
+      "source": "head\n<details><summary>s</summary>a\nb</details>\n<table><tr><td>x</td></tr></table>\ntail"
+    },
+    {
+      "name": "pre",
+      "plain": "a<pre><code>x\n  y</code></pre>b\nc",
+      "rich": "a<pre><code>x\n  y</code></pre>b<br>c",
+      "rows": [],
+      "source": "a\n<pre><code>x\n  y</code></pre>\nb\nc"
+    },
+    {
+      "name": "sample",
+      "plain": "<b>T</b> ⟨3⟩ mod\n<b>sum</b>\n<blockquote expandable>a\ninner</blockquote>\n<b>k</b>: <code>v</code>",
+      "rich": "<b>T</b> <tg-button type=\"disabled\">3</tg-button> <tg-button type=\"callback_data\" data=\"open\">mod</tg-button><details><summary>sum</summary>a<blockquote>inner</blockquote><tg-button type=\"copy_text\" text=\"v\">📋</tg-button></details><table><tr><th>k</th><td><code>v</code></td></tr></table><tg-button-row><tg-button type=\"callback_data\" data=\"plus\">+1</tg-button><tg-button type=\"disabled\">5</tg-button></tg-button-row><img src=\"https://a.b/c.png\"/>",
+      "rows": [
+        [
+          {
+            "data": "open",
+            "text": "mod"
+          }
+        ],
+        [
+          {
+            "copy": "v",
+            "text": "📋 v"
+          }
+        ],
+        [
+          {
+            "data": "plus",
+            "text": "+1"
+          },
+          {
+            "disabled": true,
+            "text": "5"
+          }
+        ]
+      ],
+      "source": "<b>T</b> <tg-button type=\"disabled\">3</tg-button> <tg-button type=\"callback_data\" data=\"open\">mod</tg-button>\n<details><summary>sum</summary>a\n<blockquote>inner</blockquote><tg-button type=\"copy_text\" text=\"v\">📋</tg-button></details>\n<table><tr><th>k</th><td><code>v</code></td></tr></table>\n<tg-button-row><tg-button type=\"callback_data\" data=\"plus\">+1</tg-button><tg-button type=\"disabled\">5</tg-button></tg-button-row><img src=\"https://a.b/c.png\"/>"
+    },
+    {
+      "name": "open-details",
+      "plain": "<b>Title</b>\n<blockquote>First\nSecond</blockquote>",
+      "rich": "<details open><summary><b>Title</b></summary>First<br>Second</details>",
+      "rows": [],
+      "source": "<details open><summary><b>Title</b></summary>First<br>Second</details>"
+    },
+    {
+      "name": "nested-quotes",
+      "plain": "<blockquote expandable>a\nb\nc</blockquote>",
+      "rich": "<blockquote expandable>a<blockquote>b</blockquote>c</blockquote>",
+      "rows": [],
+      "source": "<blockquote expandable>a<blockquote>b</blockquote>c</blockquote>"
+    },
+    {
+      "name": "table",
+      "plain": "<b>Key</b>: Value · Other\nA · B",
+      "rich": "<table bordered compact><tr><th>Key</th><td>Value</td><td>Other</td></tr><tr><td>A</td><td>B</td></tr></table>",
+      "rows": [],
+      "source": "<table bordered compact><tr><th>Key</th><td>Value</td><td>Other</td></tr><tr><td>A</td><td>B</td></tr></table>"
+    },
+    {
+      "name": "lists",
+      "plain": "<b>Heading</b>\n• A\n• <i>B</i>\ntail",
+      "rich": "<h2>Heading</h2><ul><li>A</li><li><i>B</i></li></ul><hr/>tail",
+      "rows": [],
+      "source": "<h2>Heading</h2><ul><li>A</li><li><i>B</i></li></ul><hr/>tail"
+    },
+    {
+      "name": "entities",
+      "plain": "<b>A &amp; B &lt;x&gt;</b> 🙂 <a href=\"https://a.b/?x=1&amp;y=2\">link</a>",
+      "rich": "<b>A &amp; B &lt;x&gt;</b> &#128578; <a href=\"https://a.b/?x=1&amp;y=2\">link</a>",
+      "rows": [],
+      "source": "<b>A &amp; B &lt;x&gt;</b> &#128578; <a href=\"https://a.b/?x=1&amp;y=2\">link</a>"
+    },
+    {
+      "name": "copy-url",
+      "plain": "beforeafter",
+      "rich": "before<tg-button type=\"copy_text\" text=\"a&amp;b\">Copy</tg-button><tg-button type=\"url\" url=\"https://a.b/?x=1&amp;y=2\">Open</tg-button>after",
+      "rows": [
+        [
+          {
+            "copy": "a&b",
+            "text": "Copy"
+          },
+          {
+            "text": "Open",
+            "url": "https://a.b/?x=1&y=2"
+          }
+        ]
+      ],
+      "source": "before<tg-button type=\"copy_text\" text=\"a&amp;b\">Copy</tg-button><tg-button type=\"url\" url=\"https://a.b/?x=1&amp;y=2\">Open</tg-button>after"
+    },
+    {
+      "name": "row-chunks",
+      "plain": "",
+      "rich": "<tg-button-row><tg-button type=\"disabled\">0</tg-button><tg-button type=\"disabled\">1</tg-button><tg-button type=\"disabled\">2</tg-button><tg-button type=\"disabled\">3</tg-button><tg-button type=\"disabled\">4</tg-button><tg-button type=\"disabled\">5</tg-button><tg-button type=\"disabled\">6</tg-button><tg-button type=\"disabled\">7</tg-button><tg-button type=\"disabled\">8</tg-button><tg-button type=\"disabled\">9</tg-button></tg-button-row>",
+      "rows": [
+        [
+          {
+            "disabled": true,
+            "text": "0"
+          },
+          {
+            "disabled": true,
+            "text": "1"
+          },
+          {
+            "disabled": true,
+            "text": "2"
+          },
+          {
+            "disabled": true,
+            "text": "3"
+          },
+          {
+            "disabled": true,
+            "text": "4"
+          },
+          {
+            "disabled": true,
+            "text": "5"
+          },
+          {
+            "disabled": true,
+            "text": "6"
+          },
+          {
+            "disabled": true,
+            "text": "7"
+          }
+        ],
+        [
+          {
+            "disabled": true,
+            "text": "8"
+          },
+          {
+            "disabled": true,
+            "text": "9"
+          }
+        ]
+      ],
+      "source": "<tg-button-row><tg-button type=\"disabled\">0</tg-button><tg-button type=\"disabled\">1</tg-button><tg-button type=\"disabled\">2</tg-button><tg-button type=\"disabled\">3</tg-button><tg-button type=\"disabled\">4</tg-button><tg-button type=\"disabled\">5</tg-button><tg-button type=\"disabled\">6</tg-button><tg-button type=\"disabled\">7</tg-button><tg-button type=\"disabled\">8</tg-button><tg-button type=\"disabled\">9</tg-button></tg-button-row>"
+    },
+    {
+      "name": "stray-end",
+      "plain": "ab",
+      "rich": "a</tg-button>b",
+      "rows": [],
+      "source": "a</tg-button>b"
+    },
+    {
+      "name": "nested-button",
+      "plain": "⟨i⟩o",
+      "rich": "<tg-button type=\"url\" url=\"https://a.b\"><tg-button>i</tg-button>o</tg-button>",
+      "rows": [],
+      "source": "<tg-button type=\"url\" url=\"https://a.b\"><tg-button>i</tg-button>o</tg-button>"
+    },
+    {
+      "name": "multiline",
+      "plain": "hello\nworld\n\nnext",
+      "rich": "hello<br>world<br><br><br>next",
+      "rows": [],
+      "source": "\n\nhello\nworld\n\n\nnext\n"
+    },
+    {
+      "name": "pre-entities",
+      "plain": "<pre><code class=\"language-rust\">a &lt; b\n  \"x\"</code></pre>",
+      "rich": "<pre><code class=\"language-rust\">a &lt; b\n  &quot;x&quot;</code></pre>",
+      "rows": [],
+      "source": "<pre><code class=\"language-rust\">a &lt; b\n  &quot;x&quot;</code></pre>"
+    },
+    {
+      "name": "emoji",
+      "plain": "<tg-emoji emoji-id=\"123\">★</tg-emoji><tg-spoiler>hide</tg-spoiler>",
+      "rich": "<tg-emoji emoji-id=\"123\">★</tg-emoji><tg-spoiler>hide</tg-spoiler>",
+      "rows": [],
+      "source": "<tg-emoji emoji-id=\"123\">★</tg-emoji><tg-spoiler>hide</tg-spoiler>"
+    },
+    {
+      "name": "quoted-attribute",
+      "plain": "<a href=\"https://example.com/?q=&#39;x&#39;&amp;s=&quot;y&quot;\">\"quoted\"</a>",
+      "rich": "<a href=\"https://example.com/?q=&#39;x&#39;&amp;s=&quot;y&quot;\">\"quoted\"</a>",
+      "rows": [],
+      "source": "<a href=\"https://example.com/?q=&#39;x&#39;&amp;s=&quot;y&quot;\">\"quoted\"</a>"
+    },
+    {
+      "name": "uppercase",
+      "plain": "head\n<b>Title</b>\n<blockquote>A\nB</blockquote>\n<PRE>x\n y</pre>tail",
+      "rich": "head<DETAILS OPEN><SUMMARY>Title</SUMMARY>A<BR/>B</DETAILS><PRE>x\n y</PRE>tail",
+      "rows": [],
+      "source": "head\n<DETAILS OPEN><SUMMARY>Title</SUMMARY>A<BR/>B</DETAILS>\n<PRE>x\n y</PRE>\ntail"
+    },
+    {
+      "name": "nested-details",
+      "plain": "<b>Outer</b>\n<blockquote expandable>A\n<b>Inner</b>\nB\nC</blockquote>",
+      "rich": "<details><summary>Outer</summary>A<details open><summary>Inner</summary>B</details>C</details>",
+      "rows": [],
+      "source": "<details><summary>Outer</summary>A<details open><summary>Inner</summary>B</details>C</details>"
+    }
+  ]
+}

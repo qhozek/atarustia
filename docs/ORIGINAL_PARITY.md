@@ -69,6 +69,17 @@ target и screenshots требуют живой приёмки. Не счита�
 собственными вариантами не являются целью этого порта. Название репозитория/бинарника atarustia
 не означает разрешение менять интерфейс Ataraxia.
 
+## Rich messages — общий рендерер
+
+Help, конфигуратор и rich-builder используют общий normalizer и структурный HTML fallback
+из исходного rich screen: details/quotes/tables/lists/pre, переносы и извлечение кнопок.
+Действия/стили привязаны к идентичности кнопки, не подписи; права и ротация callback сохраняются.
+Длинный fallback делится по UTF-16 тексту с пересечением entities, клавиатура ограничена 100
+кнопками с резервом для нижних controls. Сетевые ошибки/FloodWait не запускают plain retry.
+18 reference vectors и регрессии проверяются локально; это не live visual acceptance.
+Raw callbacks без объявленного действия отключены; атрибуты HTML канонизируются токенизатором.
+[Реализация, отличие retry policy и границы](RICH_MESSAGES.md).
+
 ## Зафиксировано
 
 - `web-resources/index.html`, `static/app.js`, `static/app.css`, `static/metal.js`,
@@ -102,7 +113,7 @@ target и screenshots требуют живой приёмки. Не счита�
 - PNG `ataraxia.png`, `bot_pfp.png`, `ataraxia_backup.png` скопированы побайтово и проверяются
   SHA-256. Старый неиспользуемый `assets/atarustia.png` не удалён.
 
-Это не завершённая визуальная parity: полный оригинальный help fallback, custom placeholders
+Это не завершённая визуальная parity: live оригинальный help fallback, custom placeholders
 модулей, весь набор текстов security/loader/backup/executor, логи, предложение backup period,
 восстановление/настройка существующего бота, forum-folder/admin/General и CLI-баннеры ещё
 требуют переноса. Не маскируются Rhai-eval, иной backup-format и прочие технические отличия.

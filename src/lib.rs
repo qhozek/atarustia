@@ -50,6 +50,7 @@ pub mod presentation;
 pub mod rare_payload;
 pub mod request_peer;
 pub mod rich;
+pub mod rich_html;
 pub mod rich_payload;
 pub mod runtime;
 pub mod scheduler;

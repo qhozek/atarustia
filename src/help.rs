@@ -483,7 +483,7 @@ impl Canvas {
             text: plain.clone(),
             pages,
             html: true,
-            rich_html: Some(self.rich.join("<br>")),
+            rich_html: Some(crate::rich_html::to_rich(&self.rich.join("\n"))),
             rich_buttons: self.keys,
             buttons,
             link_preview: false,

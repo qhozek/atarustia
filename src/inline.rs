@@ -144,7 +144,12 @@ impl BotHandle {
                 .await;
                 match outcome {
                     Ok(()) => break,
-                    Err(_) if context.forms.lock().unwrap().plain_fallback(&id) => continue,
+                    Err(ref e)
+                        if crate::rich_html::rejected(e)
+                            && context.forms.lock().unwrap().plain_fallback(&id) =>
+                    {
+                        continue;
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -958,7 +963,7 @@ async fn handle(context: &Context, update: Update) -> Result<()> {
                         if rich.is_some() {
                             let result =
                                 bot.bot.edit_callback_rich(&q, message.clone(), rich).await;
-                            if result.is_err()
+                            if result.as_ref().is_err_and(crate::rich_html::rejected_api)
                                 && context.forms.lock().unwrap().plain_fallback(&click.unit)
                             {
                                 let plain = context.forms.lock().unwrap().render(&click.unit, 0)?;

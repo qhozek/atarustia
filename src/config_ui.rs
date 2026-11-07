@@ -236,18 +236,6 @@ fn row(buttons: &[String]) -> String {
         buttons.join("")
     )
 }
-fn plain(source: &str) -> String {
-    let mut s = source.replace("<br>", "\n");
-    for tag in ["</summary>", "</details>", "</tr>", "</tg-button-row>"] {
-        s = s.replace(tag, "\n");
-    }
-    s = s.replace("</blockquote>", "</blockquote>\n");
-    s = s.replace("</th>", ": ").replace("</td><td>", " · ");
-    let re =
-        regex::Regex::new(r"</?(?:details|summary|table|tr|th|td|tg-button-row|tg-button)\b[^>]*>")
-            .unwrap();
-    re.replace_all(&s, "").into_owned()
-}
 struct Canvas {
     ui: Ui,
     source: Vec<String>,
@@ -326,10 +314,10 @@ impl Canvas {
     }
     fn finish(self, reply: Option<State>) -> Screen {
         let source = self.source.join("\n");
-        let (text, fallback) = fallback(&source, &self.taps);
+        let fallback = crate::rich_html::fallback(&source, &self.taps, &self.styles);
         Screen {
-            text,
-            rich_html: Some(to_rich(&source)),
+            text: fallback.text.clone(),
+            rich_html: Some(crate::rich_html::to_rich(&source)),
             rich_buttons: self.taps,
             rich_button_appearance: self.styles,
             buttons: self.rows,
@@ -338,72 +326,10 @@ impl Canvas {
             close_button: false,
             link_preview: false,
             config_reply: reply,
-            config_fallback: Some(fallback),
+            config_fallback: Some(fallback.keys()),
             ..Default::default()
         }
     }
-}
-fn to_rich(source: &str) -> String {
-    let blocks=regex::Regex::new(r"\n*(</?(?:details|summary|table|tr|th|td|blockquote|tg-button-row|img|h[1-6]|hr|pre|ul|ol|li)\b[^>]*>)\n*").unwrap();
-    let source = blocks.replace_all(source.trim_matches('\n'), "$1");
-    let pre = regex::Regex::new(r"(?s)<pre\b[^>]*>.*?</pre>").unwrap();
-    let mut result = String::new();
-    let mut offset = 0;
-    for found in pre.find_iter(&source) {
-        result.push_str(&source[offset..found.start()].replace('\n', "<br>"));
-        result.push_str(found.as_str());
-        offset = found.end();
-    }
-    result.push_str(&source[offset..].replace('\n', "<br>"));
-    result
-}
-fn fallback(source: &str, taps: &[Key]) -> (String, Vec<Vec<Key>>) {
-    let row_re = regex::Regex::new(r#"(?s)<tg-button-row\b[^>]*>(.*?)</tg-button-row>"#).unwrap();
-    let marker_re = regex::Regex::new(r"\{\{atarustia:tap:(\d+)\}\}").unwrap();
-    let cell_re = regex::Regex::new(
-        r#"\{\{atarustia:tap:(\d+)\}\}|<tg-button type="disabled"[^>]*>(.*?)</tg-button>"#,
-    )
-    .unwrap();
-    let mut rows = vec![];
-    let mut rest = source;
-    let mut text = String::new();
-    let mut loose = vec![];
-    let add_loose = |s: &str, loose: &mut Vec<Key>| {
-        for capture in marker_re.captures_iter(s) {
-            if let Ok(i) = capture[1].parse::<usize>()
-                && let Some(k) = taps.get(i)
-            {
-                loose.push(k.clone());
-            }
-        }
-    };
-    for found in row_re.captures_iter(source) {
-        let whole = found.get(0).unwrap();
-        let before = &rest[..whole.start() - (source.len() - rest.len())];
-        text.push_str(before);
-        add_loose(before, &mut loose);
-        rows.extend(loose.chunks(2).map(|r| r.to_vec()));
-        loose.clear();
-        let mut keys = vec![];
-        for capture in cell_re.captures_iter(&found[1]) {
-            if let Some(label) = capture.get(2) {
-                keys.push(key(label.as_str(), Action::Disabled));
-            } else if let Ok(i) = capture[1].parse::<usize>()
-                && let Some(k) = taps.get(i)
-            {
-                keys.push(k.clone());
-            }
-        }
-        rows.extend(keys.chunks(8).map(|r| r.to_vec()));
-        rest = &source[whole.end()..];
-    }
-    text.push_str(rest);
-    add_loose(rest, &mut loose);
-    rows.extend(loose.chunks(2).map(|r| r.to_vec()));
-    for (i, k) in taps.iter().enumerate() {
-        text = text.replace(&crate::rich::marker(i), &escape(&k.text));
-    }
-    (plain(&text), rows)
 }
 fn back(ui: Ui, state: State) -> Key {
     nav(
@@ -1662,7 +1588,7 @@ pub(crate) async fn edit_unit(
         .edit_inline_message(&id, body, None, rich.as_deref())
         .await
     {
-        if rich.is_none() {
+        if rich.is_none() || !crate::rich_html::rejected_api(&error) {
             return Err(error.into());
         }
         let body = {
