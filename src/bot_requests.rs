@@ -84,7 +84,7 @@ impl Text {
         } else {
             let input = match self.parse_mode {
                 ParseMode::Plain => InputMessage::new().text(&self.text),
-                ParseMode::Html => InputMessage::new().html(&self.text),
+                ParseMode::Html => crate::emoji::input(&self.text),
                 ParseMode::Markdown => InputMessage::new().markdown(&self.text),
             };
             let article = grammers_client::update::Article::new("", input);

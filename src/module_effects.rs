@@ -564,7 +564,7 @@ pub fn inline(
         && screen.gallery.is_empty()
     {
         let body = if screen.html {
-            InputMessage::new().html(&screen.text)
+            crate::emoji::input(&screen.text)
         } else {
             InputMessage::new().text(&screen.text)
         };

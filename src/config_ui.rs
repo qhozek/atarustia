@@ -103,23 +103,7 @@ impl Ui {
         format(forms[index], &[n.to_string()])
     }
     fn icon(self, name: &str) -> String {
-        let (id, emoji, plain) = match name {
-            "settings" => (6021582331251268218i64, "⚙", "⚙"),
-            "core" => (6023761060786346622, "⚡️", "⛈"),
-            "external" => (6024106569430472546, "📦", "📦"),
-            "library" => (6021836189588265800, "📖", "📚"),
-            "module" => (6024065724291488135, "🧩", "🧩"),
-            "edit" => (6024110353296660793, "✏️", "✎"),
-            "folder" => (6021375494216226506, "📁", "📁"),
-            "info" => (6019094432790354513, "💬", "ℹ️"),
-            "warning" => (6019102674832595118, "⚠️", "⚠"),
-            _ => (0, "", ""),
-        };
-        if self.premium && id != 0 {
-            format!("<tg-emoji emoji-id=\"{id}\">{emoji}</tg-emoji>")
-        } else {
-            plain.into()
-        }
+        crate::emoji::html(name, self.premium)
     }
     fn value(self, value: &Value, kind: &str, hidden: bool, limit: usize) -> String {
         if hidden {
@@ -128,11 +112,13 @@ impl Ui {
         if kind == "Boolean" || value.is_boolean() {
             return format!(
                 "{} {}",
-                if value.as_bool().unwrap_or(false) {
-                    "●"
+                crate::emoji::icon(if value.as_bool().unwrap_or(false) {
+                    "on"
                 } else {
-                    "○"
-                },
+                    "off"
+                })
+                .unwrap()
+                .fallback,
                 self.text(if value.as_bool().unwrap_or(false) {
                     "on_short"
                 } else {
@@ -278,21 +264,30 @@ impl Canvas {
             let (row, styles): (Vec<_>, Vec<_>) = row
                 .into_iter()
                 .map(|mut key| {
-                    let icon = [
-                        ("‹ ", 5807619215321996754i64),
-                        ("✕ ", 5807692706507399432),
-                        ("✎ ", 6024110353296660793),
-                        ("📋 ", 6021445064096486884),
-                        ("↺ ", 5807900819147724161),
-                        ("➕ ", 5807642902066634351),
-                    ]
-                    .into_iter()
-                    .find(|(prefix, _)| key.text.starts_with(prefix));
+                    let icon = ["back", "close", "edit", "copy", "reset", "add"]
+                        .into_iter()
+                        .filter_map(crate::emoji::icon)
+                        .find(|icon| key.text.starts_with(&format!("{} ", icon.fallback)))
+                        .map(|icon| (icon.fallback.len() + 1, icon.id));
+                    // "✕" is also the plain remove icon; action distinguishes it from Close.
+                    let icon = if matches!(
+                        &key.action,
+                        Some(Action::Configure {
+                            operation: Operation::Input {
+                                mode: Input::Remove
+                            },
+                            ..
+                        })
+                    ) {
+                        Some(("✕ ".len(), crate::emoji::icon("remove").unwrap().id))
+                    } else {
+                        icon
+                    };
                     let mut appearance = Appearance::default();
                     if self.ui.premium
-                        && let Some((prefix, id)) = icon
+                        && let Some((prefix_len, id)) = icon
                     {
-                        key.text = key.text[prefix.len()..].into();
+                        key.text = key.text[prefix_len..].into();
                         appearance.emoji_id = Some(id);
                     }
                     (key, appearance)
@@ -329,6 +324,22 @@ impl Canvas {
             config_fallback: Some(fallback.keys()),
             ..Default::default()
         }
+    }
+    fn tap_icon(
+        &mut self,
+        label: impl Into<String>,
+        state: State,
+        operation: Operation,
+        style: Style,
+        icon: &str,
+    ) -> String {
+        let label = label.into();
+        let (label, mut appearance) = crate::emoji::label(&label, icon, self.ui.premium);
+        appearance.style = style;
+        let marker = crate::rich::marker(self.taps.len());
+        self.taps.push(key(label, action(state, operation)));
+        self.styles.push(appearance);
+        marker
     }
 }
 fn back(ui: Ui, state: State) -> Key {
@@ -389,7 +400,8 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
                 .any(|m| m.folders.values().any(|f| f == folder))
             {
                 let mut screen = render(modules, &State::default(), ui)?;
-                warn(
+                warn_with_premium(
+                    ui.premium,
                     &mut screen,
                     &ui.f("folder_missing", std::slice::from_ref(folder)),
                 );
@@ -508,7 +520,8 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
     };
     let Some(m) = selected(modules, name) else {
         let mut screen = render(modules, &State::default(), ui)?;
-        warn(
+        warn_with_premium(
+            ui.premium,
             &mut screen,
             &ui.f("mod_missing", std::slice::from_ref(name)),
         );
@@ -601,7 +614,8 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
     };
     let Some(p) = m.keys().find(|p| p.eq_ignore_ascii_case(param)) else {
         let mut screen = render(modules, &module_state(state, &m.name), ui)?;
-        warn(
+        warn_with_premium(
+            ui.premium,
             &mut screen,
             &ui.f("param_missing", &[m.name.clone(), param.clone()]),
         );
@@ -705,7 +719,7 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
         c.add(format!("<i>{}</i>", escape(&hint)));
     }
     if hidden {
-        let tap = c.tap(
+        let tap = c.tap_icon(
             ui.text(if state.show { "hide_btn" } else { "show_btn" }),
             State {
                 show: !state.show,
@@ -713,6 +727,7 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
             },
             Operation::Navigate,
             Style::Default,
+            if state.show { "hide" } else { "eye" },
         );
         c.add(row(&[tap]));
     }
@@ -814,14 +829,15 @@ pub fn render(modules: &[Module], state: &State, ui: Ui) -> Result<Screen> {
             Some(Validator::Series { .. }) => {
                 if let Some(items) = value.as_array() {
                     for (index, item) in items.iter().enumerate().take(30) {
-                        let tap = c.tap(
-                            "✕",
+                        let tap = c.tap_icon(
+                            "",
                             state.clone(),
                             Operation::RemoveItem {
                                 index,
                                 item: item.clone(),
                             },
                             Style::Default,
+                            "remove",
                         );
                         c.add(format!("{tap} <code>{}</code>", escape(&python(item))));
                     }
@@ -957,7 +973,14 @@ fn validator_doc(ui: Ui, validator: &Validator) -> String {
     }
 }
 pub fn warn(screen: &mut Screen, text: &str) {
-    let warning = format!("⚠ {}", escape(text));
+    warn_with_premium(false, screen, text);
+}
+fn warn_with_premium(premium: bool, screen: &mut Screen, text: &str) {
+    let warning = format!(
+        "{} {}",
+        crate::emoji::html("warning", premium),
+        escape(text)
+    );
     screen.text = format!("{warning}\n{}", screen.text);
     if let Some(rich) = &mut screen.rich_html {
         *rich = format!("{warning}<br>{rich}");
@@ -1329,7 +1352,8 @@ pub fn changed_screen(
             }
         }
         Err(e) => {
-            warn(
+            warn_with_premium(
+                ui(ctx).premium,
                 &mut screen,
                 &if e.to_string() == "not_in_list" {
                     ui(ctx).text("not_in_list")

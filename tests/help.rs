@@ -95,6 +95,46 @@ fn help_delivery_uses_rich_inline_payload_until_server_rejection() {
     assert!(text.reply_markup.is_some());
 }
 #[test]
+fn premium_help_has_original_section_and_copy_icons_and_footer_styles() {
+    for premium in [false, true] {
+        let render = |state: &State| {
+            help::render(
+                &catalog(),
+                state,
+                Ui {
+                    english: true,
+                    premium,
+                },
+                ".",
+                "test_bot",
+                true,
+                false,
+                &HashMap::new(),
+                "",
+            )
+            .unwrap()
+        };
+        let screen = render(&State::default());
+        let close = screen.button_appearance.last().unwrap().last().unwrap();
+        assert_eq!(close.emoji_id, premium.then_some(5807692706507399432));
+        let html = screen.rich_html.as_ref().unwrap();
+        assert_eq!(html.contains("emoji-id=\"6023761060786346622\""), premium);
+        let card = render(&State {
+            module: Some("Core".into()),
+            ..Default::default()
+        });
+        let mut forms = Forms::default();
+        let (id, _) = forms.create(card, 123, vec![]).unwrap();
+        let html = forms.rich_source(&id).unwrap();
+        assert_eq!(html.contains("emoji-id=\"6021445064096486884\""), premium);
+        assert!(!html.contains("type=\"copy_text\" style=\"link\""));
+        if premium {
+            assert!(html.contains(">💾</tg-emoji></tg-button>"));
+            assert!(!html.contains(">▫</tg-emoji>"));
+        }
+    }
+}
+#[test]
 fn catalogue_has_original_sections_fifteen_external_entries_and_core_on_every_page() {
     let c = catalog();
     for page in 0..3 {

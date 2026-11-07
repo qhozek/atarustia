@@ -221,7 +221,56 @@ fn hidden_values_never_leak_via_copy_or_default() {
         ..state("secret")
     });
     assert!(shown.text.contains("sensitive-value"));
-    assert!(shown.rich_buttons.iter().any(|k| k.text == "Скрыть"));
+    assert!(shown.rich_buttons.iter().any(|k| k.text == "🙈 Скрыть"));
+}
+
+#[test]
+fn premium_hidden_and_series_controls_use_original_named_icons() {
+    for (parameter, show, expected) in [
+        ("secret", false, 6024008227564296298i64),
+        ("secret", true, 6021869252246510287),
+    ] {
+        let screen = config_ui::render(
+            &[module()],
+            &State {
+                show,
+                ..state(parameter)
+            },
+            Ui {
+                english: false,
+                premium: true,
+            },
+        )
+        .unwrap();
+        assert!(
+            screen
+                .rich_button_appearance
+                .iter()
+                .any(|style| style.emoji_id == Some(expected))
+        );
+        assert!(
+            screen
+                .button_appearance
+                .iter()
+                .flatten()
+                .any(|style| style.emoji_id == Some(5807692706507399432))
+        );
+    }
+    let screen = config_ui::render(
+        &[module()],
+        &state("items"),
+        Ui {
+            english: false,
+            premium: true,
+        },
+    )
+    .unwrap();
+    assert!(
+        screen
+            .rich_button_appearance
+            .iter()
+            .any(|style| style.emoji_id == Some(6021413766669801212))
+    );
 }
 #[test]
 fn long_value_reply_and_series_add_remove() {

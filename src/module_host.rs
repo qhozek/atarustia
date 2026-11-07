@@ -856,7 +856,7 @@ fn input(params: &Value) -> Result<InputMessage> {
         .unwrap_or_default();
     let html = params.get("html").and_then(Value::as_bool).unwrap_or(false);
     let input = if html {
-        InputMessage::new().html(text)
+        crate::emoji::input(text)
     } else {
         InputMessage::new().text(text)
     };

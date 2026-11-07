@@ -152,7 +152,7 @@ pub fn caption(
         "invalid message ID or caption source"
     );
     let input = if html {
-        InputMessage::new().html(text)
+        crate::emoji::input(text)
     } else {
         InputMessage::new().text(text)
     };

@@ -321,7 +321,7 @@ pub fn input(
             .rich_message(InputRichMessage::html(html)));
     }
     let value = crate::bot_requests::Text {
-        text: html
+        text: crate::emoji::normalize(&html, premium)
             .replace("<br>", "\n")
             .replace("<br/>", "\n")
             .replace("<br />", "\n"),

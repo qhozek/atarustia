@@ -15,10 +15,7 @@ pub fn user_body(
     screen: &Screen,
     premium: bool,
 ) -> anyhow::Result<grammers_client::message::InputMessage> {
-    use grammers_client::{
-        message::{InputMessage, ReplyMarkup},
-        tl,
-    };
+    use grammers_client::message::{InputMessage, ReplyMarkup};
     let mut html = screen.text.clone();
     if premium {
         html = html.replace("<b>ataraxia</b>", PREMIUM_LOGO);
@@ -26,53 +23,16 @@ pub fn user_body(
             html = format!("{PREMIUM_LOGO} {}", &html["⛈️ ".len()..]);
         }
     }
-    let mut source = String::new();
-    let mut rest = html.as_str();
-    while let Some(start) = rest.find("<tg-emoji emoji-id=") {
-        source.push_str(&rest[..start]);
-        rest = &rest[start + "<tg-emoji emoji-id=".len()..];
-        let end = rest
-            .find('>')
-            .ok_or_else(|| anyhow::anyhow!("invalid emoji tag"))?;
-        let id = rest[..end].trim_matches(['\"', '\'']).parse::<i64>()?;
-        anyhow::ensure!(id > 0, "invalid emoji ID");
-        rest = &rest[end + 1..];
-        let end = rest
-            .find("</tg-emoji>")
-            .ok_or_else(|| anyhow::anyhow!("unclosed emoji tag"))?;
-        if premium {
-            source += &format!("<a href=\"atarustia-emoji:{id}\">{}</a>", &rest[..end]);
-        } else {
-            source.push_str(&rest[..end]);
-        }
-        rest = &rest[end + "</tg-emoji>".len()..];
-    }
-    source.push_str(rest);
-    let source = normalize_time(&source)?;
+    let source = normalize_time(&crate::emoji::normalize(&html, premium))?;
     let (text, entities) = crate::bot_requests::Text {
         text: source,
         parse_mode: crate::bot_requests::ParseMode::Html,
         entities: None,
     }
     .parse(4096, false)?;
-    let entities = entities
-        .unwrap_or_default()
-        .into_iter()
-        .map(|entity| match entity {
-            tl::enums::MessageEntity::TextUrl(url) if url.url.starts_with("atarustia-emoji:") => {
-                Ok(tl::types::MessageEntityCustomEmoji {
-                    offset: url.offset,
-                    length: url.length,
-                    document_id: url.url["atarustia-emoji:".len()..].parse()?,
-                }
-                .into())
-            }
-            other => Ok(other),
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(InputMessage::new()
         .text(text)
-        .fmt_entities(entities)
+        .fmt_entities(entities.unwrap_or_default())
         .link_preview(false)
         .reply_markup(ReplyMarkup::from_buttons(&[])))
 }

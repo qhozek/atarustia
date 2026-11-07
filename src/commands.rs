@@ -455,9 +455,14 @@ impl Context {
                         )
                     ));
                 }
-                let input = grammers_client::message::InputMessage::new()
-                    .html(text)
-                    .link_preview(false);
+                let input = crate::emoji::input(&crate::original::emoji_html(
+                    &text,
+                    self.db
+                        .get("RustRuntime", "premium")
+                        .as_bool()
+                        .unwrap_or(false),
+                ))
+                .link_preview(false);
                 if message.outgoing() {
                     message.edit(input).await?;
                 } else {
@@ -496,9 +501,14 @@ impl Context {
             if let Some(bot) = self.bot.read().await.clone() {
                 bot.form(self, m, screen).await?;
             } else {
-                let input = grammers_client::message::InputMessage::new()
-                    .html(screen.text)
-                    .link_preview(false);
+                let input = crate::emoji::input(&crate::original::emoji_html(
+                    &screen.text,
+                    self.db
+                        .get("RustRuntime", "premium")
+                        .as_bool()
+                        .unwrap_or(false),
+                ))
+                .link_preview(false);
                 if m.outgoing() {
                     m.edit(input).await?;
                 } else {
@@ -855,14 +865,7 @@ impl Context {
                         "aliases"
                     )
                 );
-                let body = grammers_client::message::InputMessage::new()
-                    .html(text)
-                    .link_preview(false);
-                if m.outgoing() {
-                    m.edit(body).await?;
-                } else {
-                    m.reply(body).await?;
-                }
+                self.answer_html(m, &text).await?;
                 return Ok(None);
             }
             "addalias" => {
@@ -934,14 +937,7 @@ impl Context {
                 let text =
                     crate::config_ui::fast_config(self, args, reply.as_ref().map(|m| m.text()))?;
                 crate::module_lifecycle::config_changes(self).await;
-                let input = grammers_client::message::InputMessage::new()
-                    .html(text)
-                    .link_preview(false);
-                if m.outgoing() {
-                    m.edit(input).await?;
-                } else {
-                    m.reply(input).await?;
-                }
+                self.answer_html(m, &text).await?;
                 return Ok(None);
             }
             "modules" => {

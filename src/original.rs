@@ -97,15 +97,7 @@ pub fn message(
 }
 /// The old <emoji document_id> spelling is not understood by grammers' HTML parser.
 pub fn emoji_html(source: &str, premium: bool) -> String {
-    let re=regex::Regex::new(r#"<(?:tg-emoji|emoji) (?:emoji-id|document_id)=["']?(\d+)["']?>(.*?)</(?:tg-emoji|emoji)>"#).unwrap();
-    re.replace_all(source, |c: &regex::Captures<'_>| {
-        if premium {
-            format!("<tg-emoji emoji-id=\"{}\">{}</tg-emoji>", &c[1], &c[2])
-        } else {
-            c[2].into()
-        }
-    })
-    .into_owned()
+    crate::emoji::normalize(source, premium)
 }
 pub fn bot_username() -> String {
     use rand::{Rng, distributions::Alphanumeric};

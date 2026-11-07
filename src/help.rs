@@ -408,33 +408,23 @@ fn short(text: &str, max: usize) -> String {
     result
 }
 fn icon(name: &str, premium: bool) -> String {
-    let (id, alt, fallback): (i64, &str, &str) = match name {
-        "core" => (6023761060786346622, "⚡️", "⛈"),
-        "module" => (6024065724291488135, "🧩", "🧩"),
-        "hide" => (6021869252246510287, "👁", "🙈"),
-        "eye" => (6024008227564296298, "👁", "👁"),
-        "command" => (6021607757457660145, "🖥", "⌨"),
-        "bot" => (6019462434178211398, "📱", "🤖"),
-        "guest" => (6021690418398239007, "👥", "🫂"),
-        _ => (6019094432790354513, "💬", "ℹ️"),
-    };
-    if premium {
-        format!("<tg-emoji emoji-id=\"{id}\">{alt}</tg-emoji>")
-    } else {
-        fallback.into()
-    }
+    crate::emoji::html(name, premium)
 }
 struct Canvas {
     rich: Vec<String>,
     plain: Vec<String>,
     keys: Vec<Key>,
+    styles: Vec<crate::markup::Appearance>,
+    premium: bool,
 }
 impl Canvas {
-    fn new() -> Self {
+    fn new(premium: bool) -> Self {
         Self {
             rich: vec![],
             plain: vec![],
             keys: vec![],
+            styles: vec![],
+            premium,
         }
     }
     fn add(&mut self, rich: String, plain: String) {
@@ -442,15 +432,81 @@ impl Canvas {
         self.plain.push(plain);
     }
     fn tap(&mut self, label: String, action: Action) -> String {
+        self.icon_tap(label, action, None, crate::markup::Style::Link)
+    }
+    fn icon_tap(
+        &mut self,
+        label: String,
+        action: Action,
+        icon: Option<&str>,
+        style: crate::markup::Style,
+    ) -> String {
         let i = self.keys.len();
+        let (label, mut appearance) = icon
+            .map(|name| crate::emoji::label(&label, name, self.premium))
+            .unwrap_or((label, Default::default()));
+        appearance.style = style;
         self.keys.push(Key {
             text: label,
             action: Some(action),
             url: None,
         });
+        self.styles.push(appearance);
         crate::rich::marker(i)
     }
-    fn finish(self, buttons: Vec<Vec<Key>>) -> Screen {
+    fn finish(self, mut buttons: Vec<Vec<Key>>) -> Screen {
+        let button_appearance = buttons
+            .iter_mut()
+            .map(|row| {
+                row.iter_mut()
+                    .map(|key| {
+                        let name = match &key.action {
+                            Some(Action::Close) => Some("close"),
+                            Some(Action::HelpSettings { .. }) => Some("settings"),
+                            Some(Action::HelpUnhideAll { .. }) => Some("eye"),
+                            Some(Action::HelpToggle { .. }) => Some(
+                                if key.text
+                                    == crate::original::text(false, "ataraxia_info", "unhide_btn")
+                                    || key.text
+                                        == crate::original::text(
+                                            true,
+                                            "ataraxia_info",
+                                            "unhide_btn",
+                                        )
+                                {
+                                    "eye"
+                                } else {
+                                    "hide"
+                                },
+                            ),
+                            Some(Action::HelpNavigate { .. }) if key.text.starts_with("‹ ") => {
+                                Some("back")
+                            }
+                            _ => None,
+                        };
+                        if let Some(name) = name {
+                            let label = if matches!(name, "close" | "settings" | "back") {
+                                key.text
+                                    .split_once(' ')
+                                    .map(|(_, label)| label)
+                                    .unwrap_or(&key.text)
+                            } else {
+                                &key.text
+                            };
+                            let (text, mut appearance) =
+                                crate::emoji::label(label, name, self.premium);
+                            key.text = text;
+                            if matches!(key.action, Some(Action::HelpUnhideAll { .. })) {
+                                appearance.style = crate::markup::Style::Success;
+                            }
+                            appearance
+                        } else {
+                            Default::default()
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
         let plain = self.plain.join("\n");
         let mut pages = vec![];
         let mut page = String::new();
@@ -484,13 +540,8 @@ impl Canvas {
             pages,
             html: true,
             rich_html: Some(crate::rich_html::to_rich(&self.rich.join("\n"))),
-            rich_button_appearance: vec![
-                crate::markup::Appearance {
-                    style: crate::markup::Style::Link,
-                    emoji_id: None
-                };
-                self.keys.len()
-            ],
+            rich_button_appearance: self.styles,
+            button_appearance,
             rich_buttons: self.keys,
             buttons,
             link_preview: false,
@@ -654,7 +705,7 @@ fn render_inner(
         .skip(page * PAGE_SIZE)
         .take(PAGE_SIZE)
         .collect::<Vec<_>>();
-    let mut c = Canvas::new();
+    let mut c = Canvas::new(ui.premium);
     if !banner.is_empty() {
         c.rich.push(format!("<img src=\"{}\"/>", escape(banner)));
     }
@@ -674,14 +725,16 @@ fn render_inner(
         let label = ui.text("hidden_badge", &[("count", hidden.to_string())]);
         head += &format!(
             " {}",
-            c.tap(
+            c.icon_tap(
                 label.clone(),
                 Action::HelpNavigate {
                     state: State {
                         hidden: true,
                         ..state.home()
                     }
-                }
+                },
+                Some("hide"),
+                crate::markup::Style::Default
             )
         );
         plain += &format!(" · {}", escape(&label));
@@ -705,7 +758,19 @@ fn render_inner(
             rich.push(r);
             plain.push(p);
         }
-        let title = format!("<b>{}</b> · {}", ui.text(title, &[]), modules.len());
+        let title = format!(
+            "{} <b>{}</b> · {}",
+            icon(
+                if title == "builtin_section" {
+                    "core"
+                } else {
+                    "module"
+                },
+                ui.premium
+            ),
+            ui.text(title, &[]),
+            modules.len()
+        );
         c.add(
             details(&title, &rich.join("<br>"), open),
             format!("{title}\n{}", plain.join("\n")),
@@ -731,7 +796,7 @@ fn hidden(catalog: &Catalog, state: &State, ui: Ui, prefix: &str, owner: bool) -
         .collect::<Vec<_>>();
     let pages = all.len().div_ceil(PAGE_SIZE).max(1);
     let page = state.page.min(pages - 1);
-    let mut c = Canvas::new();
+    let mut c = Canvas::new(ui.premium);
     let title = format!(
         "{} <b>{}</b> · {}",
         icon("hide", ui.premium),
@@ -749,12 +814,14 @@ fn hidden(catalog: &Catalog, state: &State, ui: Ui, prefix: &str, owner: bool) -
         let undo = if owner {
             format!(
                 " {}",
-                c.tap(
+                c.icon_tap(
                     ui.text("unhide_short", &[]),
                     Action::HelpToggle {
                         module: module.name.clone(),
                         state: state.clone()
-                    }
+                    },
+                    Some("eye"),
+                    crate::markup::Style::Default
                 )
             )
         } else {
@@ -894,7 +961,7 @@ fn card(
         closest: state.closest || !exact,
         ..state.clone()
     };
-    let mut c = Canvas::new();
+    let mut c = Canvas::new(ui.premium);
     if let Some(url) = &module.metadata.banner_url {
         c.rich.push(format!("<img src=\"{}\"/>", escape(url)));
     }
@@ -1006,7 +1073,12 @@ fn card(
                 format!(" ({})", aliases.join(", "))
             }
         );
-        let copy = c.tap(format!("📋 {}", cmd.name), Action::Copy { text: full });
+        let copy = c.icon_tap(
+            String::new(),
+            Action::Copy { text: full },
+            Some("copy"),
+            crate::markup::Style::Default,
+        );
         rich.push(format!("{line} {copy}"));
         plain.push(line);
     }
@@ -1053,7 +1125,8 @@ fn card(
             )
             .map(|cmd| {
                 format!(
-                    "<code>@{} {}</code> — {}",
+                    "{} <code>@{} {}</code> — {}",
+                    icon(if guest { "guest" } else { "bot" }, ui.premium),
                     escape(bot),
                     escape(&cmd.name),
                     escape(&short(&cmd.description, 60))
@@ -1067,21 +1140,30 @@ fn card(
         );
     }
     if module.name == crate::info::MODULE {
-        let title = ui.text("placeholders", &[]);
+        let title = format!(
+            "{} {}",
+            icon("placeholder", ui.premium),
+            ui.text("placeholders", &[])
+        );
         let list = crate::info::PLACEHOLDERS
             .iter()
-            .map(|p| format!("<code>{{{p}}}</code>"))
+            .map(|p| format!("{} <code>{{{p}}}</code>", icon("placeholder", ui.premium)))
             .collect::<Vec<_>>()
             .join(" ");
         c.add(details(&title, &list, false), format!("{title}\n{list}"));
     }
     if let Some(dev) = &module.metadata.developer {
-        let text = escape(&ui.text("developer", &[("name", dev.clone())]));
+        let text = format!(
+            "{} {}",
+            icon("user", ui.premium),
+            escape(&ui.text("developer", &[("name", dev.clone())]))
+        );
         c.add(text.clone(), text);
     }
     if state.closest {
         let text = format!(
-            "ℹ️ <i>{}</i>",
+            "{} <i>{}</i>",
+            icon("info", ui.premium),
             escape(&ui.text("not_exact", &[("name", module.name.clone())]))
         );
         c.add(text.clone(), text);
@@ -1223,9 +1305,14 @@ pub async fn send(ctx: &Context, message: &Message, args: &str) -> Result<()> {
         screen.pages
     };
     for (index, page) in pages.into_iter().enumerate() {
-        let input = grammers_client::message::InputMessage::new()
-            .html(page)
-            .link_preview(false);
+        let input = crate::emoji::input(&crate::emoji::normalize(
+            &page,
+            ctx.db
+                .get("RustRuntime", "premium")
+                .as_bool()
+                .unwrap_or(false),
+        ))
+        .link_preview(false);
         if index == 0 && message.outgoing() {
             message.edit(input).await?;
         } else {

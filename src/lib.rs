@@ -18,6 +18,7 @@ pub mod config_ui;
 pub mod content;
 pub mod database;
 pub mod dispatcher;
+pub mod emoji;
 pub mod file_id;
 pub mod forms;
 pub mod gift_payload;

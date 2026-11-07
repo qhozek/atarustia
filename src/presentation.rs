@@ -296,7 +296,7 @@ pub fn start_card(english: bool) -> Result<InputMessage> {
         english,
         "inline_stuff",
         "this_is_ataraxia",
-        &["⛈️".into(), "⛈️".into()],
+        &["⛈️".into(), crate::update_ui::PREMIUM_LOGO.into()],
         &[],
     );
     let rows = vec![
@@ -310,8 +310,7 @@ pub fn start_card(english: bool) -> Result<InputMessage> {
             Style::Default,
         )],
     ];
-    Ok(InputMessage::new()
-        .html(crate::original::emoji_html(&text, false))
+    Ok(crate::emoji::input(&text)
         .link_preview(false)
         .reply_markup(crate::markup::keyboard(&rows)?))
 }
@@ -345,13 +344,14 @@ pub fn quickstart(english: bool, premium: bool) -> Result<InputMessage> {
             emoji_id: None,
         },
     ];
-    Ok(InputMessage::new()
-        .html(crate::original::emoji_html(&text, false))
-        .link_preview(false)
-        .reply_markup(crate::markup::keyboard(&[
-            languages,
-            community(english, "quickstart"),
-        ])?))
+    Ok(
+        crate::emoji::input(&crate::original::emoji_html(&text, premium))
+            .link_preview(false)
+            .reply_markup(crate::markup::keyboard(&[
+                languages,
+                community(english, "quickstart"),
+            ])?),
+    )
 }
 pub async fn greet(ctx: &Context, bot: &crate::bot::Bot) -> Result<()> {
     if ctx
@@ -382,13 +382,12 @@ pub fn no_inline_commands(english: bool) -> grammers_client::update::Article {
     use grammers_client::update::Article;
     Article::new(
         crate::original::text(english, "$inline", "show_inline_cmds"),
-        InputMessage::new()
-            .html(crate::original::text(
-                english,
-                "$inline",
-                "no_inline_cmds_msg",
-            ))
-            .link_preview(false),
+        crate::emoji::input(&crate::original::text(
+            english,
+            "$inline",
+            "no_inline_cmds_msg",
+        ))
+        .link_preview(false),
     )
     .description(crate::original::text(english, "$inline", "no_inline_cmds"))
 }
@@ -435,13 +434,13 @@ pub async fn inline_catalog(
             ],
             &[],
         );
-        let input = InputMessage::new()
-            .html(body)
-            .link_preview(false)
-            .reply_markup(ReplyMarkup::from_buttons(&[vec![Button::switch(
-                crate::original::text(english, "$inline", "run_command"),
-                format!("{} ", c.name),
-            )]]));
+        let input =
+            crate::emoji::input(&body)
+                .link_preview(false)
+                .reply_markup(ReplyMarkup::from_buttons(&[vec![Button::switch(
+                    crate::original::text(english, "$inline", "run_command"),
+                    format!("{} ", c.name),
+                )]]));
         results.push(
             Article::new(
                 crate::original::message(
@@ -463,15 +462,14 @@ pub async fn inline_catalog(
     }
     let summary = Article::new(
         crate::original::text(english, "$inline", "show_inline_cmds"),
-        InputMessage::new()
-            .html(crate::original::message(
-                english,
-                "$inline",
-                "inline_cmds_msg",
-                &[lines.join("\n")],
-                &[],
-            ))
-            .link_preview(false),
+        crate::emoji::input(&crate::original::message(
+            english,
+            "$inline",
+            "inline_cmds_msg",
+            &[lines.join("\n")],
+            &[],
+        ))
+        .link_preview(false),
     )
     .description(crate::original::message(
         english,

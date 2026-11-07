@@ -1000,7 +1000,7 @@ impl Forms {
                 rich.clone(),
             ))
         } else if unit.screen.html {
-            InputMessage::new().html(body)
+            crate::emoji::input(&body)
         } else {
             InputMessage::new().text(body)
         };

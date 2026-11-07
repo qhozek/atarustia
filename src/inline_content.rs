@@ -131,7 +131,7 @@ fn text_limit(value: &str, min: usize, max: usize, label: &str) -> Result<()> {
 fn text_content(text: &str, html: bool) -> Result<tl::types::InputBotInlineMessageText> {
     ensure!(text.len() <= 64 * 1024, "inline text source exceeds 64 KiB");
     let input = if html {
-        InputMessage::new().html(text)
+        crate::emoji::input(text)
     } else {
         InputMessage::new().text(text)
     };

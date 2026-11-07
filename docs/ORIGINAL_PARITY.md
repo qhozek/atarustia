@@ -71,6 +71,11 @@ target и screenshots требуют живой приёмки. Не счита�
 
 ## Rich messages — общий рендерер
 
+Premium: общий каталог всех 35 именованных Screen icons (ID/alt/plain fallback),
+общий HTML → custom-emoji entities адаптер вместо потерь в grammers, недостающие
+help/config/footer/copy icons и logo quickstart. [Область и проверки](PREMIUM_EMOJI.md).
+Это не закрывает оформление ещё не реализованных исходных command screens.
+
 Help, конфигуратор и rich-builder используют общий normalizer и структурный HTML fallback
 из исходного rich screen: details/quotes/tables/lists/pre, переносы и извлечение кнопок.
 Действия/стили привязаны к идентичности кнопки, не подписи; права и ротация callback сохраняются.

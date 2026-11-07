@@ -618,10 +618,7 @@ pub async fn handle_update(ctx: &Context, update: &Update) -> Result<bool> {
                     "🔄 <b>Transferring value to userbot...</b>"
                 };
                 query
-                    .answer([Article::new(
-                        title,
-                        grammers_client::message::InputMessage::new().html(transfer),
-                    )])
+                    .answer([Article::new(title, crate::emoji::input(transfer))])
                     .private()
                     .cache_time(0)
                     .send()

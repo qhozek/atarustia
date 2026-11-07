@@ -197,6 +197,16 @@ pub fn styled_button_html(
     }
     let html = html.replacen("<tg-button", &format!("<tg-button{attrs}"), 1);
     if let Some(id) = appearance.emoji_id {
+        let icon = crate::emoji::ICONS.iter().find(|icon| icon.id == id);
+        let alt = icon.map_or("▫", |icon| icon.alt);
+        let fallback = icon.map_or("▫", |icon| icon.fallback);
+        let icon_only = icon.is_some_and(|icon| label == icon.fallback);
+        let html = if icon_only {
+            html.replace(&format!(">{}</tg-button>", escape(label)), "></tg-button>")
+        } else {
+            html
+        };
+        let space = if icon_only { "" } else { " " };
         if matches!(
             appearance.style,
             crate::markup::Style::Primary
@@ -204,11 +214,14 @@ pub fn styled_button_html(
                 | crate::markup::Style::Danger
         ) {
             // Telegram colored rich buttons use a plain icon; keep custom icons in fallback markup.
-            return html.replacen('>', ">▫ ", 1);
+            return html.replacen('>', &format!(">{}{space}", escape(fallback)), 1);
         }
         html.replacen(
             '>',
-            &format!("><tg-emoji emoji-id=\"{id}\">▫</tg-emoji> "),
+            &format!(
+                "><tg-emoji emoji-id=\"{id}\">{}</tg-emoji>{space}",
+                escape(alt)
+            ),
             1,
         )
     } else {

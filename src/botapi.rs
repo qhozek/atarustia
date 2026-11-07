@@ -1128,7 +1128,7 @@ impl InlineResult {
                 id,
                 title,
                 if *html {
-                    grammers_client::message::InputMessage::new().html(text)
+                    crate::emoji::input(text)
                 } else {
                     grammers_client::message::InputMessage::new().text(text)
                 },
@@ -1145,7 +1145,7 @@ impl InlineResult {
                 id,
                 title,
                 if *html {
-                    grammers_client::message::InputMessage::new().html(caption)
+                    crate::emoji::input(caption)
                 } else {
                     grammers_client::message::InputMessage::new().text(caption)
                 },

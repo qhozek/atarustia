@@ -444,7 +444,7 @@ pub fn fallback(source: &str, taps: &[Key], appearances: &[Appearance]) -> Fallb
 pub fn plain_pages(html: &str) -> anyhow::Result<Vec<grammers_client::message::InputMessage>> {
     use crate::botapi::MessageEntity;
     use grammers_client::{message::InputMessage, tl, update::Article};
-    let article = Article::new("", InputMessage::new().html(html));
+    let article = Article::new("", crate::emoji::input(html));
     let tl::enums::InputBotInlineMessage::Text(content) = article.raw.send_message else {
         unreachable!()
     };

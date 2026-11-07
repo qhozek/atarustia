@@ -112,7 +112,7 @@ impl Surface {
 }
 pub fn body(screen: &Screen) -> InputMessage {
     let input = if screen.html {
-        InputMessage::new().html(&screen.text)
+        crate::emoji::input(&screen.text)
     } else {
         InputMessage::new().text(&screen.text)
     };
